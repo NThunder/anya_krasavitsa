@@ -597,7 +597,9 @@ async function fetchFirst(names) {
 }
 
 window.READY = (async () => {
-	R = await (await fetchFirst(['reel.json', 'reel'])).json();
+	// Данные ролика: встроены в страницу (<script id="reel-data">) или лежат рядом файлом.
+	const inline = document.getElementById('reel-data');
+	R = inline ? JSON.parse(inline.textContent) : await (await fetchFirst(['reel.json', 'reel'])).json();
 	const faces = FONTS.map((f) => new FontFace(f.family, `url(fonts/${f.file}.woff2)`,
 		{weight: f.weight, style: f.style || 'normal', ...(f.range ? {unicodeRange: f.range} : {})}));
 	await Promise.all(faces.map(async (ff) => { await ff.load(); document.fonts.add(ff); }));

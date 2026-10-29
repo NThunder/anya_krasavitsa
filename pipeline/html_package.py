@@ -3,9 +3,10 @@
     python -m pipeline.html_package agent-team            # собрать пакет в reels/<slug>/html/
     python -m pipeline.html_package agent-team --render   # и отрендерить локально (tools/html-video.mjs)
 
-В пакете четыре входа шага command:
-    page.html   — страница ролика (html/reel.html), ждёт window.READY, кадр рисует window.seek(t)
-    reel.json   — реплики с таймингами слов и сценами, геометрия лица аватара, демо
+В пакете входы шага command (page, voice, assets) и данные отдельным файлом:
+    page.html   — страница ролика (html/reel.html) со встроенными данными ролика (те же, что в reel.json);
+                  ждёт window.READY, кадр рисует window.seek(t)
+    reel.json   — реплики с таймингами слов и сценами, геометрия лица аватара, демо (для отладки)
     voice.mp3   — озвучка (страница сама считает по ней, как открывать рот)
     assets.zip  — board.png, star.png, avatar.png, fonts/*.woff2 (распаковывается рядом со страницей)
 """
@@ -58,7 +59,11 @@ def build(slug):
     }
     (out / "reel.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", build_dir / "voice.wav", "-b:a", "192k", out / "voice.mp3"], check=True)
-    shutil.copy(ROOT / "html" / "reel.html", out / "page.html")
+    # Данные встраиваем в страницу: тогда шагу command хватает входов page, voice и assets.
+    page = (ROOT / "html" / "reel.html").read_text(encoding="utf-8")
+    embedded = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    page = page.replace("<script>\n'use strict';", f'<script id="reel-data" type="application/json">{embedded}</script>\n<script>\n\'use strict\';', 1)
+    (out / "page.html").write_text(page, encoding="utf-8")
 
     for name in ("page.html", "reel.json", "voice.mp3"):
         shutil.copy(out / name, site / name)
