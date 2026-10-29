@@ -11,20 +11,11 @@ import subprocess
 
 from .common import REELS, ROOT
 from .config import AVATAR_IMAGE
+from .collage import comic_avatar
 from .mouth import envelope
 
 VIDEO = ROOT / "video"
 CHROME = "/opt/pw-browsers/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell"
-
-
-def cut_out(src, dst, tol=22, soft=28):
-    """Убирает однотонный фон картинки аватара (цвет берём из угла) -> PNG с прозрачностью."""
-    import numpy as np
-    from PIL import Image
-    im = np.array(Image.open(src).convert("RGB")).astype(int)
-    bg = im[:12, :12].reshape(-1, 3).mean(0)
-    alpha = np.clip((np.sqrt(((im - bg) ** 2).sum(2)) - tol) / soft, 0, 1) * 255
-    Image.fromarray(np.dstack([im, alpha]).astype("uint8"), "RGBA").save(dst)
 
 
 def prepare(slug):
@@ -39,11 +30,11 @@ def prepare(slug):
     visuals = {l["id"]: l["visual"] for l in script["lines"]}
 
     shutil.copy(build / "voice.wav", pub / "voice.wav")
-    # Аватар стоит внизу кадра весь ролик: картинка без фона + рот по громкости голоса (локально).
-    cut_out(ROOT / AVATAR_IMAGE, pub / "avatar.png")
+    # Аватар стоит внизу кадра весь ролик: наклейка в стиле коллажа + рот по громкости голоса (локально).
+    face = json.loads((ROOT / AVATAR_IMAGE).with_name("face.json").read_text(encoding="utf-8"))
     avatar = {
         "image": "reel/avatar.png",
-        "face": json.loads((ROOT / AVATAR_IMAGE).with_name("face.json").read_text(encoding="utf-8")),
+        "face": comic_avatar(ROOT / AVATAR_IMAGE, pub / "avatar.png", face),
         "mouth": envelope(build / "voice.wav", [w for l in tl["lines"] for w in l["words"]], 0, tl["duration"] + 0.6),
     }
     demo = reel / "demo.json"

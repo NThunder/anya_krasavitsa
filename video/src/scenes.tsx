@@ -59,9 +59,9 @@ export const Swarm: React.FC<SceneProps> = ({line, cue}) => {
 // ---------- 6 ботов — 6 задач ----------
 const ROLES = [
 	{icon: IconChart, label: 'следит\nза рынком'},
-	{icon: IconTarget, label: 'ищет\nудачный момент'},
+	{icon: IconTarget, label: 'ищет удачный\nмомент'},
 	{icon: IconNews, label: 'читает\nновости'},
-	{icon: IconCoins, label: 'следит за\nкрупными игроками'},
+	{icon: IconCoins, label: 'смотрит, куда\nидут деньги'},
 	{icon: IconAlert, label: 'ищет\nриски'},
 	{icon: IconCrown, label: 'главный'},
 ];
@@ -84,7 +84,7 @@ export const Roles: React.FC<SceneProps> = ({line, continued, cue}) => {
 					const Icon = r.icon;
 					return (
 						<Card key={i} active={active} style={{
-							height: 230, padding: '30px 34px', display: 'flex', flexDirection: 'column',
+							minHeight: 250, padding: '28px 32px', display: 'flex', flexDirection: 'column', gap: 18, boxSizing: 'border-box',
 							justifyContent: 'space-between', opacity: v * (dim ? 0.38 : 1),
 							transform: `translateY(${(1 - v) * 30}px) scale(${active ? 1.03 : 1})`,
 						}}>
@@ -92,7 +92,7 @@ export const Roles: React.FC<SceneProps> = ({line, continued, cue}) => {
 								<Icon size={66} color={active ? C.accent : C.text} />
 								<span style={{fontFamily: FONT, fontWeight: 700, fontSize: 30, color: C.muted}}>#{i + 1}</span>
 							</div>
-							<div style={{fontFamily: FONT, fontWeight: 800, fontSize: 46, lineHeight: 1.12, color: C.text, whiteSpace: 'pre-line'}}>
+							<div style={{fontFamily: FONT, fontWeight: 800, fontSize: 42, lineHeight: 1.12, color: C.text, whiteSpace: 'pre-line'}}>
 								{r.label}
 							</div>
 						</Card>
@@ -260,11 +260,14 @@ const DEMO_NAMES = ['Отзывы', 'Цены', 'Склад', 'Потери'];
 export const DemoRun: React.FC<SceneProps> = ({line, demo, continued, cue}) => {
 	const f = useCurrentFrame();
 	const {fps} = useVideoConfig();
-	const {phase, highlight = []}: {phase: string; highlight: number[]} = line.visual as any;
+	const {phase, highlight = [], cues = []}: {phase: string; highlight: number[]; cues: string[]} = line.visual as any;
 	const done = phase === 'done';
+	// auto: помощники быстро отрабатывают сами, находки подсвечиваются на словах из cues
+	const auto = phase === 'auto';
 	const panel = useEnter(0, !continued);
 	const notes = demo?.notes ?? [];
-	const runFor = 1.1 * fps; // «агент думает» перед ответом
+	const runFor = (auto ? 0.5 : 1.1) * fps; // «агент думает» перед ответом
+	const lit = highlight.filter((h, k) => auto && f >= cue(new RegExp(cues[k] ?? '^$'), 999) - 3);
 	return (
 		<Stage gap={0}>
 			<Card style={{width: 960, padding: '36px 36px 20px', background: C.bgDeep, ...rise(panel)}}>
@@ -275,11 +278,11 @@ export const DemoRun: React.FC<SceneProps> = ({line, demo, continued, cue}) => {
 					</div>
 				</div>
 				{notes.slice(0, 4).map((n, i) => {
-					const t0 = done ? -999 : cue(DEMO_CUES[i], i * 40);
+					const t0 = done ? -999 : auto ? 4 + i * 8 : cue(DEMO_CUES[i], i * 40);
 					const v = done || continued ? Math.max(done ? 1 : 0, lerp(f, t0 - 4, t0 + 8)) : lerp(f, t0 - 4, t0 + 8);
 					const finished = done || f > t0 + runFor;
-					const dim = done && highlight.length > 0 && !highlight.includes(i);
-					const hot = done && highlight.includes(i);
+					const dim = (done && highlight.length > 0 && !highlight.includes(i)) || (lit.length > 0 && !lit.includes(i));
+					const hot = (done && highlight.includes(i)) || lit.includes(i);
 					const Icon = DEMO_ICONS[i];
 					return (
 						<div key={i} style={{

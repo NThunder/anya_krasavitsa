@@ -35,7 +35,7 @@ export const CONTENT = {top: 0, bottom: STAGE.h};
 
 // Под листом: субтитры, ниже у самого края кадра — аватар.
 export const SUB_TOP = 1150;
-export const AVATAR = {scale: 0.73, cut: 1150}; // строка картинки аватара, которая приходится на низ кадра
+export const AVATAR = {scale: 0.73, cut: 1190}; // строка картинки аватара (с полями наклейки), которая приходится на низ кадра
 
 export const FONT = 'Manrope';
 

@@ -64,6 +64,11 @@ export const Reel: React.FC<ReelProps> = ({voice, avatar, lines, demo, duration}
 			</Board>
 			{avatar ? (
 				<AbsoluteFill style={{transform: `translateY(${(1 - rise) * 500}px)`}}>
+					{/* Жёлтая звезда из шаблона за головой — аватар вписан в коллаж */}
+					<Img src={staticFile('template/star.png')} style={{
+						position: 'absolute', left: 560, top: 1250, width: 340,
+						transform: `rotate(${f * 0.25}deg) scale(${1 + Math.sin(f / 18) * 0.03})`,
+					}} />
 					<CartoonAvatar image={avatar.image} face={avatar.face} mouth={avatar.mouth} scale={AVATAR.scale} cut={AVATAR.cut} />
 				</AbsoluteFill>
 			) : null}
