@@ -1,0 +1,10 @@
+.env
+node_modules/
+video/public/reel/
+video/out/
+reels/*/source/video.mp4
+reels/*/source/frames/
+__pycache__/
+*.pyc
+reels/*/build/
+assets/avatar/variant_*
