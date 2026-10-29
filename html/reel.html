@@ -510,8 +510,8 @@ function mouthEnvelope(rms, words) {
 	});
 }
 
-async function audioRms(url, frames) {
-	const buf = await (await fetch(url)).arrayBuffer();
+async function audioRms(names, frames) {
+	const buf = await (await fetchFirst(names)).arrayBuffer();
 	const audio = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(buf);
 	const ch = [...Array(audio.numberOfChannels)].map((_, i) => audio.getChannelData(i));
 	const hop = audio.sampleRate / FPS;
@@ -590,8 +590,14 @@ window.seek = function seek(t) {
 };
 
 // ---------- Подготовка: данные, шрифты, картинки, громкость ----------
+// Вход может лечь рядом со страницей под своим именем без расширения (reel, voice) — пробуем оба.
+async function fetchFirst(names) {
+	for (const n of names) { const r = await fetch(n); if (r.ok) return r; }
+	throw new Error('нет файла: ' + names.join(', '));
+}
+
 window.READY = (async () => {
-	R = await (await fetch('reel.json')).json();
+	R = await (await fetchFirst(['reel.json', 'reel'])).json();
 	const faces = FONTS.map((f) => new FontFace(f.family, `url(fonts/${f.file}.woff2)`,
 		{weight: f.weight, style: f.style || 'normal', ...(f.range ? {unicodeRange: f.range} : {})}));
 	await Promise.all(faces.map(async (ff) => { await ff.load(); document.fonts.add(ff); }));
@@ -601,7 +607,7 @@ window.READY = (async () => {
 	const words = R.lines.flatMap((l) => l.words);
 	let rms;
 	try {
-		rms = await audioRms(R.voice || 'voice.mp3', frames);
+		rms = await audioRms([R.voice || 'voice.mp3', 'voice'], frames);
 	} catch (e) {
 		// Запасной путь: громкость по кадрам от программы (0..1), переводим на 30 к/с.
 		const L = window.AUDIO_LEVELS || [];
