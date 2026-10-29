@@ -62,3 +62,26 @@ cp .env.example .env   # и вписать ключи
 ```
 
 Нужны `ffmpeg` и Node 18+. Ключи хранятся только в `.env` (он в `.gitignore`).
+
+## Сборка без Remotion: html-video (для процесса Tropos)
+
+Тот же ролик одной HTML-страницей, которую снимает программа `html-video` на Chromium. Кадры совпадают
+с версией на Remotion, Node.js и Remotion в песочнице не нужны.
+
+```bash
+python -m pipeline.html_package agent-team            # пакет в reels/agent-team/html/
+python -m pipeline.html_package agent-team --render   # и локальный рендер копией html-video
+```
+
+Пакет — четыре входа шага `command`:
+
+| Файл | Что внутри |
+|---|---|
+| `page.html` | страница ролика (`html/reel.html`): ждёт `window.READY`, кадр рисует `window.seek(t)` |
+| `reel.json` | реплики с таймингами слов и сценами, геометрия лица аватара, данные демо |
+| `voice.mp3` | озвучка; страница сама считает по ней, как открывать рот (запасной путь — `window.AUDIO_LEVELS`) |
+| `assets.zip` | `board.png`, `star.png`, `avatar.png`, `fonts/*.woff2` — распаковывается рядом со страницей |
+
+Вызов программы: `html-video {in:page} {out:reel.mp4} --size 1080x1920 --fps 30 --duration <длина+0.6> --audio {in:voice}`.
+`tools/html-video.mjs` — локальная копия с тем же порядком работы: раздаёт папку страницы по `http://127.0.0.1`,
+ждёт шрифты, картинки и `window.READY`, для каждого кадра вызывает `window.seek(t)` и делает снимок.

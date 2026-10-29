@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Reel</title>
+<!--
+  Рилс одной страницей для html-video (Chromium, без Remotion).
+  Рядом со страницей: reel.json (реплики, слова, сцены), voice.mp3 и файлы из assets.zip
+  (board.png, star.png, avatar.png, fonts/*.woff2). Программа ждёт window.READY,
+  затем для каждого кадра вызывает window.seek(t) и делает снимок.
+-->
+<style>
+	html, body { margin: 0; width: 1080px; height: 1920px; overflow: hidden; background: #343a66; }
+	#root { position: relative; width: 1080px; height: 1920px; overflow: hidden; background: #343a66; }
+	.fill { position: absolute; left: 0; top: 0; width: 1080px; height: 1920px; }
+	.abs { position: absolute; }
+	#subs { position: absolute; left: 0; width: 1080px; display: flex; justify-content: center; }
+</style>
+</head>
+<body>
+<div id="root">
+	<div id="board" class="fill">
+		<img id="boardImg" class="abs" src="board.png" alt="">
+		<div id="stage" class="abs"></div>
+	</div>
+	<div id="avatarLayer" class="fill">
+		<img id="star" class="abs" src="star.png" alt="">
+		<div id="avatarBox" class="abs">
+			<img id="avatarImg" src="avatar.png" alt="" style="width:100%;height:100%;display:block">
+			<svg id="face" style="position:absolute;left:0;top:0;width:100%;height:100%"></svg>
+		</div>
+	</div>
+	<div id="subs"></div>
+</div>
+<script>
+'use strict';
+
+// ---------- Константы дизайна (как в video/src/theme.ts) ----------
+const FPS = 30; // все тайминги сцен — в кадрах при 30 к/с; t переводится в кадры сам
+const C = {
+	bg: '#343a66', text: '#262a4f', muted: '#6d6878', accent: '#d9453f', accentSoft: 'rgba(217,69,63,0.13)',
+	card: '#fbf8f1', line: 'rgba(38,42,79,0.18)', bgDeep: '#fbf8f1', sun: '#f3d63b',
+};
+const BOARD = {w: 1073, h: 1246, scale: 0.9, left: 52, top: 8};
+const PAPER_IN = {x0: 131, y0: 193, x1: 953, y1: 1114};
+const PAPER = {
+	x: BOARD.left + PAPER_IN.x0 * BOARD.scale, y: BOARD.top + PAPER_IN.y0 * BOARD.scale,
+	w: (PAPER_IN.x1 - PAPER_IN.x0) * BOARD.scale, h: (PAPER_IN.y1 - PAPER_IN.y0) * BOARD.scale,
+};
+const STAGE = {w: 1080, h: 1180};
+const STAGE_SCALE = Math.min((PAPER.w - 40) / STAGE.w, (PAPER.h - 40) / STAGE.h);
+const SUB_TOP = 1150;
+const AVATAR = {scale: 0.73, cut: 1190};
+const FONT = 'Manrope';
+
+const CYR = 'U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116';
+const LAT = 'U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD';
+const FONTS = [
+	...['500', '700', '800'].flatMap((w) => [
+		{family: FONT, file: `manrope-cyrillic-${w}-normal`, weight: w, range: CYR},
+		{family: FONT, file: `manrope-latin-${w}-normal`, weight: w, range: LAT},
+	]),
+	{family: 'R Playfair', file: 'playfair-display-cyrillic-900-normal', weight: '900'},
+	{family: 'R Oswald', file: 'oswald-cyrillic-700-normal', weight: '700'},
+	{family: 'R Lobster', file: 'lobster-cyrillic-400-normal', weight: '400'},
+	{family: 'R Russo', file: 'russo-one-cyrillic-400-normal', weight: '400'},
+	{family: 'R Yeseva', file: 'yeseva-one-cyrillic-400-normal', weight: '400'},
+	{family: 'R RubikMono', file: 'rubik-mono-one-cyrillic-400-normal', weight: '400'},
+	{family: 'R PTSerif', file: 'pt-serif-cyrillic-700-italic', weight: '700', style: 'italic'},
+	{family: 'R Unbounded', file: 'unbounded-cyrillic-900-normal', weight: '900'},
+	{family: 'R Ruslan', file: 'ruslan-display-cyrillic-400-normal', weight: '400'},
+];
+const RANSOM_FONTS = FONTS.filter((f) => f.family.startsWith('R '));
+
+// ---------- Математика анимации (аналог remotion: spring, interpolate) ----------
+const clamp01 = (x) => Math.max(0, Math.min(1, x));
+const lerp = (f, a, b, from = 0, to = 1) => from + (to - from) * clamp01((f - a) / (b - a));
+const interp = (v, [a, b], [from, to]) => from + (to - from) * clamp01((v - a) / (b - a));
+
+// Пружина массы m с жёсткостью k и вязкостью c из 0 в 1; frame — кадры при 30 к/с.
+function spring(frame, {damping = 10, mass = 1, stiffness = 100} = {}) {
+	if (frame <= 0) return 0;
+	const t = frame / FPS;
+	const w0 = Math.sqrt(stiffness / mass);
+	const z = damping / (2 * Math.sqrt(stiffness * mass));
+	if (z < 1) {
+		const wd = w0 * Math.sqrt(1 - z * z);
+		return 1 - Math.exp(-z * w0 * t) * (Math.cos(wd * t) + (z * w0 / wd) * Math.sin(wd * t));
+	}
+	if (z === 1) return 1 - Math.exp(-w0 * t) * (1 + w0 * t);
+	const s = Math.sqrt(z * z - 1);
+	const r1 = -w0 * (z - s), r2 = -w0 * (z + s);
+	return 1 + (r2 * Math.exp(r1 * t) - r1 * Math.exp(r2 * t)) / (r1 - r2);
+}
+const enter = (f, delay = 0, enabled = true, damping = 18) => (enabled ? spring(f - delay, {damping, mass: 0.7}) : 1);
+const rise = (v, px = 40) => ({opacity: v, transform: `translateY(${(1 - v) * px}px)`});
+
+// ---------- Мини-разметка ----------
+const UNITLESS = new Set(['opacity', 'zIndex', 'flex', 'lineHeight', 'fontWeight', 'flexGrow', 'flexShrink', 'order']);
+const css = (o) => Object.entries(o || {}).filter(([, v]) => v !== undefined && v !== null && v !== false)
+	.map(([k, v]) => `${k.replace(/[A-Z]/g, (m) => '-' + m.toLowerCase())}:${typeof v === 'number' && !UNITLESS.has(k) ? v + 'px' : v}`)
+	.join(';');
+const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const div = (style, inner = '') => `<div style="${css(style)}">${inner}</div>`;
+const span = (style, inner = '') => `<span style="${css(style)}">${inner}</span>`;
+
+const Stage = (inner, gap = 56) => div({
+	position: 'absolute', left: 0, top: 0, width: STAGE.w, height: STAGE.h, padding: '0 70px', boxSizing: 'border-box',
+	display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap,
+}, inner);
+const Title = (text, size = 88, color = C.text, style = {}) => div({
+	fontFamily: FONT, fontWeight: 800, fontSize: size, lineHeight: 1.06, color, letterSpacing: -1.5,
+	textAlign: 'center', whiteSpace: 'pre-line', ...style,
+}, text);
+const Pill = (inner, style = {}) => div({
+	display: 'inline-flex', alignItems: 'center', gap: 12, padding: '12px 28px', borderRadius: 999,
+	background: C.accent, color: C.bgDeep, fontFamily: FONT, fontWeight: 800, fontSize: 34,
+	transform: 'rotate(-2deg)', boxShadow: '0 4px 8px rgba(20,22,50,0.2)', ...style,
+}, inner);
+// Бумажки коллажа: кремовая, выделенная — жёлтая как звёзды шаблона.
+const Card = (inner, active = false, style = {}) => div({
+	background: active ? C.sun : C.card, boxShadow: '0 6px 14px rgba(20,22,50,0.18)', borderRadius: 18, ...style,
+}, inner);
+const Badge = (inner, size = 120, active = false, style = {}) => div({
+	width: size, height: size, borderRadius: size, display: 'flex', alignItems: 'center', justifyContent: 'center',
+	background: active ? C.accent : C.card, boxShadow: '0 5px 12px rgba(20,22,50,0.18)', flexShrink: 0, ...style,
+}, inner);
+const Typed = (text, start, cps, f) => {
+	const n = Math.max(0, Math.floor(((f - start) / FPS) * cps));
+	return esc(text.slice(0, n)) + span({opacity: 0}, esc(text.slice(n)));
+};
+const Spinner = (size, f) => `<svg width="${size}" height="${size}" viewBox="0 0 40 40" style="transform:rotate(${f * 12}deg)">
+	<circle cx="20" cy="20" r="16" stroke="${C.line}" stroke-width="4" fill="none"/>
+	<path d="M20 4a16 16 0 0 1 16 16" stroke="${C.accent}" stroke-width="4" fill="none" stroke-linecap="round"/></svg>`;
+const Check = (size, v) => `<svg width="${size}" height="${size}" viewBox="0 0 40 40">
+	<circle cx="20" cy="20" r="18" fill="${C.accent}" opacity="${v}"/>
+	<path d="M12 20.5l5.5 5.5L28.5 15" stroke="${C.bgDeep}" stroke-width="4.5" fill="none" stroke-linecap="round"
+		stroke-linejoin="round" stroke-dasharray="30" stroke-dashoffset="${30 * (1 - v)}"/></svg>`;
+
+// ---------- Иконки: линейные, толщина 3, скруглённые концы ----------
+const svgIcon = (body) => (size = 72, color = C.text) =>
+	`<svg width="${size}" height="${size}" viewBox="0 0 64 64" fill="none" stroke="${color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">${body(color)}</svg>`;
+const I = {
+	chart: svgIcon((c) => `<path d="M8 54h48"/><path d="M10 44l12-12 9 8 13-17 10 6"/><circle cx="54" cy="29" r="2.5" fill="${c}"/>`),
+	target: svgIcon((c) => `<circle cx="32" cy="32" r="22"/><circle cx="32" cy="32" r="12"/><circle cx="32" cy="32" r="3" fill="${c}"/>`),
+	news: svgIcon(() => `<rect x="10" y="12" width="44" height="40" rx="6"/><path d="M18 22h28M18 31h28M18 40h16"/>`),
+	coins: svgIcon(() => `<ellipse cx="32" cy="18" rx="16" ry="6"/><path d="M16 18v10c0 3.3 7.2 6 16 6s16-2.7 16-6V18"/><path d="M16 28v10c0 3.3 7.2 6 16 6s16-2.7 16-6V28"/><path d="M16 38v8c0 3.3 7.2 6 16 6s16-2.7 16-6v-8"/>`),
+	alert: svgIcon((c) => `<path d="M32 10L56 52H8z"/><path d="M32 26v12"/><circle cx="32" cy="45" r="1.8" fill="${c}"/>`),
+	crown: svgIcon(() => `<path d="M10 46L14 20l11 12 7-16 7 16 11-12 4 26z"/><path d="M12 54h40"/>`),
+	mug: svgIcon(() => `<path d="M12 18h32v24a10 10 0 0 1-10 10H22a10 10 0 0 1-10-10z"/><path d="M44 24h4a7 7 0 0 1 0 14h-4"/><path d="M20 8c0 3 3 3 3 6M30 8c0 3 3 3 3 6"/>`),
+	chat: svgIcon(() => `<path d="M12 14h40v28H28l-10 8v-8h-6z"/><path d="M22 25h20M22 32h12"/>`),
+	tag: svgIcon(() => `<path d="M10 34V12h22l22 22-22 22z"/><circle cx="21" cy="23" r="3"/>`),
+	box: svgIcon(() => `<path d="M32 8l22 11v26L32 56 10 45V19z"/><path d="M10 19l22 11 22-11M32 30v26"/>`),
+	leak: svgIcon(() => `<circle cx="32" cy="26" r="16"/><path d="M25 26h14"/><path d="M24 50l-2 6M32 48v8M40 50l2 6"/>`),
+	moon: svgIcon(() => `<path d="M44 42A20 20 0 0 1 24 14a20 20 0 1 0 20 28z"/>`),
+	bookmark: svgIcon(() => `<path d="M18 8h28v48L32 46 18 56z"/>`),
+	person: svgIcon(() => `<circle cx="32" cy="20" r="10"/><path d="M14 56c0-10 8-18 18-18s18 8 18 18"/>`),
+	bot: svgIcon((c) => `<rect x="12" y="20" width="40" height="30" rx="10"/><path d="M32 12v8"/><circle cx="32" cy="10" r="3"/><circle cx="25" cy="35" r="3" fill="${c}"/><circle cx="39" cy="35" r="3" fill="${c}"/>`),
+};
+
+// ---------- Сцены (как в video/src/scenes.tsx) ----------
+// Каждая сцена: (line, f, ctx) -> HTML; f — кадр от начала сцены, ctx = {continued, cue, demo}.
+
+const rnd = (i, k) => { const x = Math.sin(i * 127.1 + k * 311.7) * 43758.5453; return x - Math.floor(x); };
+const PIECES = [
+	['#f4efe4', '#1d1b1a'], ['#1d1b1a', '#f4efe4'], ['#7fcfc3', '#c79f1c'], ['#3f7a55', '#f4efe4'],
+	['#d8433f', '#f7ecd8'], ['#f2d23c', '#1d1b1a'], ['#e64a8a', '#f7ecd8'], ['#2e4a8f', '#f7f0c9'],
+	null, ['#f7f0c9', '#d8433f'], ['#c8e6cf', '#2b2f55'], ['#ffffff', '#e64a8a'], null, ['#d9c7a7', '#5a3a22'],
+];
+
+// Буква «из газеты»: влетает крупно с поворотом и садится на место (как в шаблоне).
+function Letter(ch, i, start, size, f) {
+	const font = RANSOM_FONTS[Math.floor(rnd(i, 1) * RANSOM_FONTS.length)];
+	const piece = PIECES[Math.floor(rnd(i, 2) * PIECES.length)];
+	const rot = (rnd(i, 3) - 0.5) * 14;
+	const s = size * (0.86 + rnd(i, 4) * 0.28);
+	const j = (k) => +(rnd(i, k) * 9).toFixed(1);
+	const clip = `polygon(${j(5)}% ${j(6)}%, 52% ${j(7)}%, ${100 - j(8)}% ${j(9)}%, ${100 - j(10)}% 55%, ${100 - j(11)}% ${100 - j(12)}%, 45% ${100 - j(13)}%, ${j(14)}% ${100 - j(15)}%, ${j(16)}% 48%)`;
+	if (f < start) return span({display: 'inline-block', width: s * 0.72});
+	const p = spring(f - start, {damping: 14, mass: 0.6});
+	const scale = interp(p, [0, 1], [3.2, 1]);
+	const dx = interp(p, [0, 1], [(rnd(i, 17) - 0.5) * 700, 0]);
+	const dy = interp(p, [0, 1], [380 + rnd(i, 18) * 300, 0]);
+	const r = interp(p, [0, 1], [rot + (rnd(i, 19) - 0.5) * 70, rot]);
+	return span({
+		display: 'inline-block', position: 'relative', margin: '0 3px', zIndex: f - start < 10 ? 10 : 1,
+		transform: `translate(${dx}px, ${dy}px) rotate(${r}deg) scale(${scale})`,
+		filter: 'drop-shadow(0 4px 3px rgba(0,0,0,0.25))',
+	}, span({
+		display: 'inline-block', padding: piece ? `${s * 0.05}px ${s * 0.12}px ${s * 0.02}px` : `0 ${s * 0.04}px`,
+		background: piece ? piece[0] : 'transparent', clipPath: piece ? clip : undefined,
+		color: piece ? piece[1] : '#1d1b1a', fontFamily: `'${font.family}'`, fontWeight: font.weight,
+		fontStyle: font.style || 'normal', fontSize: s, lineHeight: 1.05,
+	}, esc(ch)));
+}
+
+const SCENES = {
+	// Заголовок из букв «как из газеты» для вступления.
+	ransom(line, f, {continued}) {
+		const lines = line.visual.text.split('\n');
+		const longest = Math.max(...lines.map((l) => l.length));
+		const size = Math.min(190, (STAGE.w - 120) / (longest * 0.82));
+		let idx = 0;
+		const rows = lines.map((l) => div({display: 'flex', justifyContent: 'center', alignItems: 'center'},
+			[...l].map((ch) => {
+				const i = idx++;
+				return ch === ' ' ? span({width: size * 0.35, display: 'inline-block'}) : Letter(ch, i, continued ? -999 : 4 + i * 3, size, f);
+			}).join(''))).join('');
+		const sub = enter(f, 10);
+		const label = line.visual.sub ? div({
+			marginTop: 40, padding: '14px 34px', background: '#f7f0c9', transform: `rotate(-2deg) scale(${0.6 + 0.4 * sub})`,
+			opacity: sub, fontFamily: "'R PTSerif'", fontStyle: 'italic', fontWeight: 700, fontSize: 54, color: '#1d1b1a',
+			boxShadow: '0 4px 6px rgba(0,0,0,0.2)',
+		}, esc(line.visual.sub)) : '';
+		return div({position: 'absolute', left: 0, top: 0, width: STAGE.w, height: STAGE.h, display: 'flex',
+			flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 18}, rows + label);
+	},
+
+	// 350 ботов и 1 человек.
+	swarm(line, f, {cue}) {
+		const {count = 350, label = 'ботов', sub = 'и 1 человек'} = line.visual;
+		const s0 = 6, s1 = cue(/отдел/, 120), cols = 25;
+		const shown = Math.round(count * lerp(f, s0, s0 + 75));
+		const head = enter(f, 0), person = enter(f, s1 - 6);
+		let dots = '';
+		for (let i = 0; i < count; i++) {
+			// Точки зажигаются волной от центра.
+			const r = Math.hypot((i % cols) - cols / 2, Math.floor(i / cols) - 7) / 15;
+			const v = lerp(f, s0 + r * 66, s0 + r * 66 + 8);
+			dots += div({width: 21, height: 21, borderRadius: 21, background: C.text, opacity: 0.12 + 0.55 * v, transform: `scale(${0.4 + 0.6 * v})`});
+		}
+		return Stage(
+			div({...rise(head), display: 'flex', alignItems: 'baseline', gap: 22},
+				Title(String(shown), 190, C.text, {fontVariantNumeric: 'tabular-nums'}) + Title(esc(label), 72, C.muted)) +
+			div({display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 13}, dots) +
+			div({...rise(person), display: 'flex', alignItems: 'center', gap: 26},
+				Badge(I.person(64, C.bgDeep), 110, true) + Title(esc(sub), 64, C.text, {textAlign: 'left'})), 48);
+	},
+
+	// 6 ботов — 6 задач; подсветка на словах «Первый», «Второй»…
+	roles(line, f, {continued, cue}) {
+		const ROLES = [[I.chart, 'следит\nза рынком'], [I.target, 'ищет удачный\nмомент'], [I.news, 'читает\nновости'],
+			[I.coins, 'смотрит, куда\nидут деньги'], [I.alert, 'ищет\nриски'], [I.crown, 'главный']];
+		const ORD = [/Первый/, /Второй/, /Третий/, /Четв/, /пятый/i, /Шестой/];
+		const {title, highlight = []} = line.visual;
+		const head = enter(f, 0, !continued);
+		const span_ = Math.max(30, cue(/работа/, 60));
+		const on = highlight.filter((i) => f >= cue(ORD[i], 0) - 4);
+		const cards = ROLES.map(([icon, label], i) => {
+			const v = continued ? 1 : lerp(f, (i * span_) / 8, (i * span_) / 8 + 12);
+			const active = on.includes(i), dim = highlight.length > 0 && !active;
+			return Card(
+				div({display: 'flex', justifyContent: 'space-between', alignItems: 'center'},
+					icon(66, active ? C.accent : C.text) + span({fontFamily: FONT, fontWeight: 700, fontSize: 30, color: C.muted}, `#${i + 1}`)) +
+				div({fontFamily: FONT, fontWeight: 800, fontSize: 42, lineHeight: 1.12, color: C.text, whiteSpace: 'pre-line'}, esc(label)),
+				active, {minHeight: 250, padding: '28px 32px', display: 'flex', flexDirection: 'column', gap: 18, boxSizing: 'border-box',
+					justifyContent: 'space-between', opacity: v * (dim ? 0.38 : 1),
+					transform: `translateY(${(1 - v) * 30}px) scale(${active ? 1.03 : 1})`});
+		}).join('');
+		return Stage(Title(esc(title), 76, C.text, rise(head)) +
+			div({display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 28, width: 940}, cards), 60);
+	},
+
+	// Бот-скептик: вопрос печатается.
+	question(line, f) {
+		const e = enter(f, 0);
+		return Stage(
+			div({...rise(e), display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 30},
+				Badge(I.alert(110, C.bgDeep), 190, true) + Pill('бот №5')) +
+			Title(Typed(line.visual.text, 8, 22, f), 104), 64);
+	},
+
+	// Записки -> главный -> хозяину.
+	flow(line, f, {cue}) {
+		const icons = [I.chart, I.target, I.news, I.coins, I.alert];
+		const e = enter(f, 0), lead = enter(f, 4);
+		const tMsg = cue(/хозяину/, 90), tYes = cue(/да/i, 140);
+		const msg = enter(f, tMsg - 4);
+		const xs = [130, 300, 470, 640, 810], leadY = 470;
+		const pulse = f > tYes ? 1 + 0.06 * Math.sin(((f - tYes) / FPS) * Math.PI * 4) : 1;
+		let svg = '';
+		xs.forEach((x) => { svg += `<path d="M${x + 70} 150 C ${x + 70} 330, 540 300, 540 ${leadY - 40}" stroke="${C.line}" stroke-width="3" fill="none" stroke-dasharray="10 12" opacity="${e}"/>`; });
+		svg += `<path d="M540 ${leadY + 140} L540 650" stroke="${C.line}" stroke-width="3" stroke-dasharray="10 12" opacity="${msg}"/>`;
+		xs.forEach((x, i) => {
+			// Записка едет по кривой к главному боту, по кругу.
+			const t = (((f + i * 9) % 50) + 50) % 50 / 50;
+			const bx = (1 - t) ** 3 * (x + 70) + 3 * (1 - t) ** 2 * t * (x + 70) + 3 * (1 - t) * t ** 2 * 540 + t ** 3 * 540;
+			const by = (1 - t) ** 3 * 150 + 3 * (1 - t) ** 2 * t * 330 + 3 * (1 - t) * t ** 2 * 300 + t ** 3 * (leadY - 40);
+			svg += `<rect x="${bx - 16}" y="${by - 11}" width="32" height="22" rx="5" fill="${C.text}" opacity="${e * Math.sin(t * Math.PI) * 0.9}"/>`;
+		});
+		const badges = xs.map((x, i) => {
+			const v = lerp(f, i * 3, i * 3 + 12);
+			return Badge(icons[i](68), 140, false, {position: 'absolute', left: x, opacity: v, transform: `scale(${0.7 + 0.3 * v})`});
+		}).join('');
+		const btn = (label, active, extra = {}) => div({flex: 1, textAlign: 'center', padding: '20px 0', borderRadius: 24,
+			background: active ? C.accent : undefined, border: active ? undefined : `2px solid ${C.line}`,
+			color: active ? C.bgDeep : C.text, fontFamily: FONT, fontWeight: 800, fontSize: 40, ...extra}, label);
+		return div({position: 'absolute', left: 0, top: 0, width: STAGE.w, height: STAGE.h},
+			`<svg width="1080" height="700" style="position:absolute;left:0;top:0">${svg}</svg>` +
+			div({position: 'absolute', top: 10, left: 0, width: 1080, height: 140}, badges) +
+			div({position: 'absolute', top: leadY - 50, width: 1080, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, ...rise(lead)},
+				Badge(I.crown(100, C.bgDeep), 180, true) + div({fontFamily: FONT, fontWeight: 800, fontSize: 44, color: C.text}, 'главный')) +
+			div({position: 'absolute', top: 680, width: 1080, display: 'flex', justifyContent: 'center', ...rise(msg)},
+				Card(
+					div({display: 'flex', alignItems: 'center', gap: 18},
+						Badge(I.crown(36, C.bgDeep), 64, true) + div({fontFamily: FONT, fontWeight: 700, fontSize: 32, color: C.muted}, 'Главный бот · сейчас')) +
+					div({fontFamily: FONT, fontWeight: 800, fontSize: 46, color: C.text}, `${esc(line.visual.message)}: ${esc(line.visual.question)}`) +
+					div({display: 'flex', gap: 20}, btn('Да', true, {transform: `scale(${pulse})`}) + btn('Нет', false)),
+					false, {width: 860, padding: '34px 40px', background: C.bgDeep, display: 'flex', flexDirection: 'column', gap: 26, boxSizing: 'border-box'})));
+	},
+
+	// Без аналитиков, круглосуточно.
+	night(line, f, {cue}) {
+		const tBots = cue(/Боты/, 45), tClock = cue(/три/, 110);
+		const strike = lerp(f, 14, 30);
+		const people = enter(f, 0), bots = enter(f, tBots - 4), clock = enter(f, tClock - 4);
+		const swap = lerp(f, tClock - 8, tClock + 4);
+		let notes = '';
+		[0, 1].forEach((k) => {
+			const t = (((f + k * 22) % 44) + 44) % 44 / 44;
+			notes += `<rect x="${150 + k * 300 + t * 300 - 16}" y="${60 - Math.sin(t * Math.PI) * 50}" width="32" height="22" rx="5" fill="${C.accent}" opacity="${Math.sin(t * Math.PI)}"/>`;
+		});
+		return Stage(
+			div({height: 300, position: 'relative', width: 940, display: 'flex', justifyContent: 'center'},
+				div({position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 24, opacity: people * (1 - swap) * 0.9},
+					div({display: 'flex', gap: 30}, [0, 1, 2].map(() => I.person(110, C.muted)).join('')) +
+					div({position: 'relative'}, Title('аналитики в штате', 64, C.muted) +
+						div({position: 'absolute', left: 0, top: '52%', height: 6, borderRadius: 6, background: C.accent, width: `${strike * 100}%`}))) +
+				div({position: 'absolute', display: 'flex', alignItems: 'center', gap: 34, ...rise(clock * swap)},
+					I.moon(130, C.accent) + Title(esc(line.visual.time), 200, C.text, {fontVariantNumeric: 'tabular-nums'}))) +
+			div({position: 'relative', width: 900, height: 230, ...rise(bots)},
+				`<svg width="900" height="230" style="position:absolute">${notes}</svg>` +
+				[0, 1, 2].map((i) => Badge(I.bot(84), 150, false, {position: 'absolute', left: 75 + i * 300, top: 80})).join('')) +
+			Pill(esc(line.visual.label), {...rise(bots), fontSize: 38}), 70);
+	},
+
+	// Переход к новой части.
+	chapter(line, f) {
+		const a = enter(f, 0), b = enter(f, 8), c = enter(f, 14);
+		return Stage(
+			Badge(I.mug(150, C.bgDeep), 260, true, {opacity: a, transform: `translateY(${(1 - a) * 40}px) scale(${0.6 + 0.4 * a})`}) +
+			Pill(esc(line.visual.kicker), rise(b)) + Title(esc(line.visual.title), 100, C.text, rise(c)), 56);
+	},
+
+	// Живой запуск команды агентов (данные demo из reel.json).
+	demo_run(line, f, {continued, cue, demo}) {
+		const ICONS = [I.chat, I.tag, I.box, I.leak], CUES = [/отзыв/, /цены/, /склад/, /потер/], NAMES = ['Отзывы', 'Цены', 'Склад', 'Потери'];
+		const {phase, highlight = [], cues = []} = line.visual;
+		const done = phase === 'done', auto = phase === 'auto';
+		const panel = enter(f, 0, !continued);
+		const runFor = (auto ? 0.5 : 1.1) * FPS;
+		const lit = highlight.filter((h, k) => auto && f >= cue(new RegExp(cues[k] ?? '^$'), 999) - 3);
+		const rows = ((demo && demo.notes) || []).slice(0, 4).map((n, i) => {
+			const t0 = done ? -999 : auto ? 4 + i * 8 : cue(CUES[i], i * 40);
+			const v = done ? 1 : lerp(f, t0 - 4, t0 + 8);
+			const finished = done || f > t0 + runFor;
+			const dim = (done && highlight.length > 0 && !highlight.includes(i)) || (lit.length > 0 && !lit.includes(i));
+			const hot = (done && highlight.includes(i)) || lit.includes(i);
+			return div({display: 'flex', gap: 26, padding: '26px 0', borderTop: `2px solid ${C.line}`, opacity: v * (dim ? 0.35 : 1), transform: `translateX(${(1 - v) * 40}px)`},
+				Badge(ICONS[i](52, hot ? C.bgDeep : C.text), 96, hot) +
+				div({flex: 1, display: 'flex', flexDirection: 'column', gap: 10},
+					div({display: 'flex', justifyContent: 'space-between', alignItems: 'center'},
+						span({fontFamily: FONT, fontWeight: 800, fontSize: 46, color: hot ? C.accent : C.text}, NAMES[i]) +
+						(finished ? Check(42, done ? 1 : lerp(f, t0 + runFor, t0 + runFor + 8)) : Spinner(42, f))) +
+					div({fontFamily: FONT, fontWeight: 600, fontSize: 40, lineHeight: 1.25, color: C.text, minHeight: 100},
+						done ? esc(n.note) : Typed(n.note, t0 + runFor, 70, f))));
+		}).join('');
+		return Stage(Card(
+			div({display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20},
+				div({width: 18, height: 18, borderRadius: 18, background: C.accent}) +
+				div({fontFamily: FONT, fontWeight: 700, fontSize: 38, color: C.muted}, 'команда агентов · магазин кружек')) + rows,
+			false, {width: 960, padding: '36px 36px 20px', background: C.bgDeep, boxSizing: 'border-box', ...rise(panel)}), 0);
+	},
+
+	// Сообщение главного агента на телефоне.
+	phone(line, f, {cue, demo}) {
+		const ph = enter(f, 0), note = enter(f, 10);
+		const tYes = cue(/^Да$|^Да[.,]/, 150);
+		const tap = lerp(f, tYes - 6, tYes + 4), pressed = f > tYes + 2;
+		const lead = (demo && demo.lead) || {};
+		const btn = (label, active, extra = {}) => div({flex: 1, textAlign: 'center', padding: '18px 0', borderRadius: 22,
+			background: active ? C.accent : undefined, border: active ? undefined : `2px solid ${C.line}`,
+			color: active ? C.bgDeep : C.text, fontFamily: FONT, fontWeight: 800, fontSize: 36, ...extra}, label);
+		return Stage(div({width: 700, height: 1120, borderRadius: 80, border: `4px solid ${C.text}`, background: C.bgDeep, boxSizing: 'border-box',
+			padding: '40px 32px', display: 'flex', flexDirection: 'column', gap: 30, ...rise(ph, 80)},
+			div({alignSelf: 'center', width: 170, height: 40, borderRadius: 40, background: '#0f1522'}) +
+			div({fontFamily: FONT, fontWeight: 800, fontSize: 110, color: C.text, textAlign: 'center', letterSpacing: -3}, '09:41') +
+			div({...rise(note), background: 'rgba(38,42,79,0.06)', borderRadius: 40, padding: 30, display: 'flex', flexDirection: 'column', gap: 20},
+				div({display: 'flex', alignItems: 'center', gap: 14},
+					Badge(I.crown(32, C.bgDeep), 56, true) + span({fontFamily: FONT, fontWeight: 700, fontSize: 28, color: C.muted}, 'Главный агент · сейчас')) +
+				div({fontFamily: FONT, fontWeight: 600, fontSize: 35, lineHeight: 1.28, color: C.text}, esc(lead.message)) +
+				div({fontFamily: FONT, fontWeight: 800, fontSize: 42, lineHeight: 1.18, color: C.text}, esc(lead.question)) +
+				Pill(esc(lead.effect), {alignSelf: 'flex-start', fontSize: 28, padding: '8px 20px'}) +
+				div({display: 'flex', gap: 16, position: 'relative'},
+					btn(pressed ? 'Да ✓' : 'Да', true, {transform: `scale(${pressed ? 0.95 : 1})`}) + btn('Нет', false) +
+					// Палец-курсор нажимает «Да».
+					div({position: 'absolute', left: 120, top: 30, width: 64, height: 64, borderRadius: 64, background: 'rgba(38,42,79,0.25)',
+						border: `3px solid ${C.text}`, opacity: tap * (1 - lerp(f, tYes + 10, tYes + 22)),
+						transform: `translate(${(1 - tap) * 120}px, ${(1 - tap) * 140}px) scale(${pressed ? 0.8 : 1})`})))), 0);
+	},
+
+	// Вывод: один бот против команды.
+	statement(line, f, {cue}) {
+		const tTeam = cue(/команде/, 60);
+		const left = enter(f, 0), right = enter(f, tTeam - 4);
+		const strike = lerp(f, tTeam - 10, tTeam + 6);
+		return Stage(Title('секрет', 70, C.muted, rise(left)) +
+			div({display: 'flex', gap: 30, width: 940},
+				Card(I.bot(120, C.muted) + div({position: 'relative'}, Title(esc(line.visual.left), 60, C.text, {textAlign: 'left'}) +
+					div({position: 'absolute', left: 0, top: '48%', height: 6, borderRadius: 6, background: C.accent, width: `${strike * 100}%`})),
+					false, {flex: 1, height: 520, padding: 40, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+						opacity: left * (1 - 0.55 * strike), transform: `translateY(${(1 - left) * 30}px)`}) +
+				Card(div({display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, width: 240}, Array.from({length: 6}, () => I.bot(70, C.accent)).join('')) +
+					Title(esc(line.visual.right), 60, C.accent, {textAlign: 'left'}),
+					true, {flex: 1, height: 520, padding: 40, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', ...rise(right)})), 50);
+	},
+
+	// Призыв сохранить.
+	cta(line, f) {
+		const a = enter(f, 0), b = enter(f, 10), fill = lerp(f, 18, 32);
+		return Stage(div({position: 'relative', ...rise(a)}, Badge(I.bookmark(140, fill > 0.5 ? C.bgDeep : C.text), 260, fill > 0.5)) +
+			Title(esc(line.visual.title), 110, C.text, rise(a)) + Title(esc(line.visual.sub), 54, C.muted, {...rise(b), fontWeight: 700}), 56);
+	},
+};
+
+// ---------- Субтитры: фразы до 4 слов / ~24 символов, рвём после знаков ----------
+function makeChunks(lines) {
+	const chunks = [];
+	for (const line of lines) {
+		let cur = [];
+		const flush = () => { if (cur.length) chunks.push({text: cur.map((w) => w.w).join(' '), start: cur[0].start, end: cur[cur.length - 1].end}); cur = []; };
+		for (const w of line.words) {
+			const len = cur.map((x) => x.w).join(' ').length + w.w.length;
+			if (cur.length && (cur.length >= 4 || len > 24)) flush();
+			cur.push(w);
+			if (/[.,!?:;—»]$/.test(w.w)) flush();
+		}
+		flush();
+	}
+	return chunks.map((c, i) => { const n = chunks[i + 1]; return {...c, end: n && n.start - c.end < 0.7 ? n.start : c.end + 0.25}; });
+}
+
+// ---------- Рот и моргание аватара ----------
+function smileMouth(face, o) {
+	const {left, right, top, bottom} = face.mouth;
+	const cx = (left[0] + right[0]) / 2, cy = (left[1] + right[1]) / 2;
+	const lx = left[0] + 5 * o, rx = right[0] - 5 * o, depth = 6 + 26 * o;
+	const gap = `M${lx},${left[1]} Q${cx},${cy + 3} ${rx},${right[1]} Q${cx},${cy + depth * 1.9} ${lx},${left[1]} Z`;
+	let s = `<defs><filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="2.5"/></filter><clipPath id="gap"><path d="${gap}"/></clipPath></defs>`;
+	s += `<ellipse cx="${cx}" cy="${cy + 6}" rx="${(right[0] - left[0]) / 2 + 14}" ry="${(bottom - top) / 2 + 14 + 14 * o}" fill="${face.skin}" filter="url(#soft)"/>`;
+	s += `<ellipse cx="${cx}" cy="${top + 4}" rx="${(rx - lx) / 2 - 4}" ry="5" fill="${face.lips}" opacity="0.75" filter="url(#soft)"/>`;
+	s += `<ellipse cx="${cx}" cy="${cy + depth + 7}" rx="${(rx - lx) / 2 - 10}" ry="7" fill="${face.lips}" opacity="0.75" filter="url(#soft)"/>`;
+	if (o > 0.04) {
+		s += `<path d="${gap}" fill="#3a1717"/><g clip-path="url(#gap)">`;
+		s += `<path d="M${lx},${left[1] - 2} Q${cx},${cy + 6} ${rx},${right[1] - 2} L${rx},${right[1] + 8} Q${cx},${cy + 15} ${lx},${left[1] + 8} Z" fill="#fbf7f2"/>`;
+		s += `<ellipse cx="${cx}" cy="${cy + depth * 1.6}" rx="20" ry="9" fill="#b9605e"/></g>`;
+		s += `<path d="${gap}" fill="none" stroke="${face.line}" stroke-width="5" stroke-linejoin="round"/>`;
+	} else {
+		s += `<path d="M${lx},${left[1]} Q${cx},${cy + 9} ${rx},${right[1]}" fill="none" stroke="${face.line}" stroke-width="5" stroke-linecap="round"/>`;
+	}
+	return s;
+}
+
+function lipsMouth(face, o) {
+	const {left, right, top, bottom} = face.mouth;
+	const cy = (left[1] + right[1]) / 2, cx = (left[0] + right[0]) / 2;
+	const lx = left[0] + 4 * o, rx = right[0] - 4 * o, up = cy - top, low = bottom - cy + 17 * o, open = 24 * o;
+	const upper = `M${lx},${cy} C${lx + 16},${cy - up * 1.1} ${cx - 12},${cy - up * 1.35} ${cx},${cy - up * 0.8} C${cx + 12},${cy - up * 1.35} ${rx - 16},${cy - up * 1.1} ${rx},${cy}`;
+	const lower = `C${rx - 14},${cy + low / 0.75} ${lx + 14},${cy + low / 0.75} ${lx},${cy}`;
+	const gap = `M${lx + 5},${cy + 1} Q${cx},${cy + 5} ${rx - 5},${cy + 1} Q${cx},${cy + 5 + open * 1.9} ${lx + 5},${cy + 1} Z`;
+	let s = `<defs><filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="2.5"/></filter><clipPath id="gap"><path d="${gap}"/></clipPath></defs>`;
+	s += `<ellipse cx="${cx}" cy="${cy + 8}" rx="${(right[0] - left[0]) / 2 + 12}" ry="${26 + 18 * o}" fill="${face.skin}" filter="url(#soft)"/>`;
+	s += `<path d="${upper} ${lower} Z" fill="${face.lips}"/>`;
+	if (o > 0.04) {
+		s += `<path d="${gap}" fill="#4a1f22"/><g clip-path="url(#gap)"><path d="M${lx},${cy - 2} Q${cx},${cy + 4} ${rx},${cy - 2} L${rx},${cy + 6} Q${cx},${cy + 12} ${lx},${cy + 6} Z" fill="#fbf7f2"/><ellipse cx="${cx}" cy="${cy + 5 + open * 1.5}" rx="22" ry="9" fill="#b9605e"/></g>`;
+		s += `<path d="${gap}" fill="none" stroke="${face.line}" stroke-width="3"/>`;
+	}
+	s += `<path d="${upper}" fill="none" stroke="${face.line}" stroke-width="3.5" stroke-linecap="round"/>`;
+	s += `<path d="M${rx},${cy} ${lower}" fill="none" stroke="${face.line}" stroke-width="2.5" stroke-linecap="round" opacity="0.85"/>`;
+	if (o <= 0.04) s += `<path d="M${lx},${cy} Q${cx},${cy + 4} ${rx},${cy}" fill="none" stroke="${face.line}" stroke-width="3.5" stroke-linecap="round"/>`;
+	s += `<circle cx="${lx}" cy="${cy}" r="3.5" fill="${face.line}"/><circle cx="${rx}" cy="${cy}" r="3.5" fill="${face.line}"/>`;
+	return s;
+}
+
+const closedEyes = (face) => face.eyes.map((e) =>
+	`<ellipse cx="${e.cx}" cy="${e.cy + 1}" rx="${e.rx + 2}" ry="${e.ry + 5}" fill="${face.lid}" filter="url(#soft)"/>` +
+	`<path d="M${e.cx - e.rx},${e.cy} Q${e.cx},${e.cy + e.ry} ${e.cx + e.rx},${e.cy - 1}" fill="none" stroke="${face.line}" stroke-width="4" stroke-linecap="round"/>`).join('');
+
+// Моргаем раз в 2.3–3.8 с (детерминированно), каждый раз по 3 кадра.
+function isBlink(f) {
+	let t = 26;
+	for (let k = 0; t <= f; k++) {
+		if (f < t + 3) return true;
+		t += 70 + Math.round(((((Math.sin(k * 12.9898) * 43758.5453) % 1) + 1) % 1) * 45);
+	}
+	return false;
+}
+
+// Насколько открыт рот по кадрам: громкость голоса, закрыт между словами, сглаживание.
+function mouthEnvelope(rms, words) {
+	const pos = rms.filter((x) => x > 0).sort((a, b) => a - b);
+	const ref = pos.length ? pos[Math.floor(0.9 * (pos.length - 1))] : 1;
+	let cur = 0;
+	return rms.map((x, i) => {
+		const t = i / FPS;
+		const speaking = words.some((w) => t >= w.start - 0.02 && t <= w.end + 0.02);
+		const v = speaking ? clamp01((x / ref - 0.12) * 1.25) : 0;
+		cur += (v - cur) * (v > cur ? 0.75 : 0.5);
+		return cur;
+	});
+}
+
+async function audioRms(url, frames) {
+	const buf = await (await fetch(url)).arrayBuffer();
+	const audio = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(buf);
+	const ch = [...Array(audio.numberOfChannels)].map((_, i) => audio.getChannelData(i));
+	const hop = audio.sampleRate / FPS;
+	const out = [];
+	for (let i = 0; i < frames; i++) {
+		const a = Math.floor(i * hop), b = Math.min(Math.floor((i + 1) * hop), audio.length);
+		let s = 0;
+		for (let j = a; j < b; j++) { let m = 0; for (const c of ch) m += c[j]; m /= ch.length; s += m * m; }
+		out.push(b > a ? Math.sqrt(s / (b - a)) : 0);
+	}
+	return out;
+}
+
+// ---------- Сборка кадра ----------
+let R = null; // данные ролика
+const $ = (id) => document.getElementById(id);
+
+function layout() {
+	const bi = $('boardImg');
+	Object.assign(bi.style, {left: BOARD.left + 'px', top: BOARD.top + 'px', width: BOARD.w * BOARD.scale + 'px', height: BOARD.h * BOARD.scale + 'px'});
+	Object.assign($('stage').style, {
+		width: STAGE.w + 'px', height: STAGE.h + 'px', transformOrigin: '0 0', transform: `scale(${STAGE_SCALE})`,
+		left: PAPER.x + (PAPER.w - STAGE.w * STAGE_SCALE) / 2 + 'px', top: PAPER.y + (PAPER.h - STAGE.h * STAGE_SCALE) / 2 + 'px',
+	});
+	$('board').style.transformOrigin = '50% 30%';
+	Object.assign($('star').style, {left: '560px', top: '1250px', width: '340px'});
+	const [w, h] = R.avatar.face.size;
+	Object.assign($('avatarBox').style, {
+		left: (1080 - w * AVATAR.scale) / 2 + 'px', top: 1920 - AVATAR.cut * AVATAR.scale + 'px',
+		width: w * AVATAR.scale + 'px', height: h * AVATAR.scale + 'px', transformOrigin: '50% 100%',
+	});
+	$('face').setAttribute('viewBox', `0 0 ${w} ${h}`);
+	Object.assign($('subs').style, {top: SUB_TOP + 'px'});
+}
+
+window.seek = function seek(t) {
+	const f = t * FPS;
+	const lines = R.lines;
+	const total = Math.ceil((R.duration + 0.6) * FPS);
+
+	// Лист в руках: «впрыгивает» в начале и чуть покачивается.
+	const p = spring(f, {damping: 12, mass: 0.7});
+	const board = $('board');
+	board.style.transform = `translateY(${Math.sin(f / 30) * 4}px) rotate(${Math.sin(f / 53) * 0.4}deg) scale(${interp(p, [0, 1], [0.55, 1])}) rotate(${interp(p, [0, 1], [-9, 0])}deg)`;
+	board.style.opacity = Math.min(1, p * 2);
+
+	// Сцена текущей реплики.
+	let html = '';
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		const from = i === 0 ? 0 : Math.round(line.start * FPS) - 4;
+		const to = i + 1 < lines.length ? Math.round(lines[i + 1].start * FPS) - 4 : total;
+		if (f < from || f >= to) continue;
+		const prev = lines[i - 1];
+		const cue = (re, fallback = 0) => { const w = line.words.find((x) => re.test(x.w)); return w ? Math.round(w.start * FPS) - from : fallback; };
+		const scene = SCENES[line.visual.type];
+		if (scene) html = scene(line, f - from, {continued: !!prev && prev.visual.type === line.visual.type, cue, demo: R.demo});
+		break;
+	}
+	$('stage').innerHTML = html;
+
+	// Аватар-наклейка внизу и звезда за головой.
+	const rs = spring(f - 6, {damping: 16});
+	$('avatarLayer').style.transform = `translateY(${(1 - rs) * 500}px)`;
+	$('star').style.transform = `rotate(${f * 0.25}deg) scale(${1 + Math.sin(f / 18) * 0.03})`;
+	const fi = Math.min(Math.max(0, Math.floor(f + 1e-6)), R.mouth.length - 1);
+	const o = Math.min(0.85, R.mouth[fi] || 0);
+	$('avatarBox').style.transform = `translateY(${Math.sin(f / 24) * 3 - o * 2}px) rotate(${Math.sin(f / 41) * 0.8}deg)`;
+	const face = R.avatar.face;
+	$('face').innerHTML = (face.style === 'smile' ? smileMouth(face, o) : lipsMouth(face, o)) + (isBlink(f) ? closedEyes(face) : '');
+
+	// Субтитры: всегда одинаковые, белые, по центру под листом.
+	const c = R.chunks.find((x) => t >= x.start - 0.02 && t < x.end);
+	$('subs').innerHTML = c ? div({maxWidth: 900, textAlign: 'center', fontFamily: FONT, fontWeight: 700, fontSize: 58, lineHeight: 1.18,
+		color: '#ffffff', letterSpacing: -0.5, textShadow: '0 2px 14px rgba(0,0,0,0.45), 0 0 2px rgba(0,0,0,0.6)'}, esc(c.text)) : '';
+};
+
+// ---------- Подготовка: данные, шрифты, картинки, громкость ----------
+window.READY = (async () => {
+	R = await (await fetch('reel.json')).json();
+	const faces = FONTS.map((f) => new FontFace(f.family, `url(fonts/${f.file}.woff2)`,
+		{weight: f.weight, style: f.style || 'normal', ...(f.range ? {unicodeRange: f.range} : {})}));
+	await Promise.all(faces.map(async (ff) => { await ff.load(); document.fonts.add(ff); }));
+	await Promise.all([...document.images].map((im) => im.decode()));
+
+	const frames = Math.ceil((R.duration + 0.6) * FPS) + 1;
+	const words = R.lines.flatMap((l) => l.words);
+	let rms;
+	try {
+		rms = await audioRms(R.voice || 'voice.mp3', frames);
+	} catch (e) {
+		// Запасной путь: громкость по кадрам от программы (0..1), переводим на 30 к/с.
+		const L = window.AUDIO_LEVELS || [];
+		rms = Array.from({length: frames}, (_, i) => L.length ? L[Math.min(L.length - 1, Math.floor(i / frames * L.length))] : 0);
+	}
+	R.mouth = mouthEnvelope(rms, words);
+	R.chunks = makeChunks(R.lines);
+	layout();
+	window.seek(0);
+	await document.fonts.ready;
+	return true;
+})();
+</script>
+</body>
+</html>
