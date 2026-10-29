@@ -7,7 +7,17 @@
     "render": "remotion render src/index.ts Reel"
   },
   "dependencies": {
+    "@fontsource/comfortaa": "^5.1.0",
+    "@fontsource/lobster": "^5.1.0",
     "@fontsource/manrope": "^5.1.0",
+    "@fontsource/oswald": "^5.1.0",
+    "@fontsource/playfair-display": "^5.1.0",
+    "@fontsource/pt-serif": "^5.1.0",
+    "@fontsource/rubik-mono-one": "^5.1.0",
+    "@fontsource/ruslan-display": "^5.1.0",
+    "@fontsource/russo-one": "^5.1.0",
+    "@fontsource/unbounded": "^5.1.0",
+    "@fontsource/yeseva-one": "^5.1.0",
     "@remotion/cli": "^4.0.380",
     "@remotion/fonts": "^4.0.380",
     "@remotion/google-fonts": "^4.0.380",

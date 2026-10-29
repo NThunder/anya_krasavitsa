@@ -17,6 +17,16 @@ VIDEO = ROOT / "video"
 CHROME = "/opt/pw-browsers/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell"
 
 
+def cut_out(src, dst, tol=22, soft=28):
+    """Убирает однотонный фон картинки аватара (цвет берём из угла) -> PNG с прозрачностью."""
+    import numpy as np
+    from PIL import Image
+    im = np.array(Image.open(src).convert("RGB")).astype(int)
+    bg = im[:12, :12].reshape(-1, 3).mean(0)
+    alpha = np.clip((np.sqrt(((im - bg) ** 2).sum(2)) - tol) / soft, 0, 1) * 255
+    Image.fromarray(np.dstack([im, alpha]).astype("uint8"), "RGBA").save(dst)
+
+
 def prepare(slug):
     reel = REELS / slug
     build = reel / "build"
@@ -29,21 +39,13 @@ def prepare(slug):
     visuals = {l["id"]: l["visual"] for l in script["lines"]}
 
     shutil.copy(build / "voice.wav", pub / "voice.wav")
-    # Аватар: рисованная картинка + рот по громкости голоса (локально).
-    # Если есть сгенерированный моделью говорящий ролик (pipeline.avatar talk), берём его.
-    hooks = [l for l in tl["lines"] if l["act"] == "hook"]
-    avatar = None
-    if hooks:
-        shutil.copy(ROOT / AVATAR_IMAGE, pub / "avatar.png")
-        end = tl["lines"][len(hooks)]["start"] if len(tl["lines"]) > len(hooks) else hooks[-1]["end"] + 0.3
-        avatar = {
-            "image": "reel/avatar.png",
-            "face": json.loads((ROOT / AVATAR_IMAGE).with_name("face.json").read_text(encoding="utf-8")),
-            "mouth": envelope(build / "voice.wav", [w for l in hooks for w in l["words"]], 0, end),
-        }
-        if (build / "avatar.mp4").exists():
-            shutil.copy(build / "avatar.mp4", pub / "avatar.mp4")
-            avatar["video"] = "reel/avatar.mp4"
+    # Аватар стоит внизу кадра весь ролик: картинка без фона + рот по громкости голоса (локально).
+    cut_out(ROOT / AVATAR_IMAGE, pub / "avatar.png")
+    avatar = {
+        "image": "reel/avatar.png",
+        "face": json.loads((ROOT / AVATAR_IMAGE).with_name("face.json").read_text(encoding="utf-8")),
+        "mouth": envelope(build / "voice.wav", [w for l in tl["lines"] for w in l["words"]], 0, tl["duration"] + 0.6),
+    }
     demo = reel / "demo.json"
     props = {
         "duration": tl["duration"],

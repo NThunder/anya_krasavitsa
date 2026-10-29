@@ -2,6 +2,7 @@ import React from 'react';
 import {AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig} from 'remotion';
 import {C, CONTENT, FONT} from './theme';
 import {SceneProps} from './types';
+import {Ransom} from './Ransom';
 import {Badge, Card, Check, Pill, Spinner, Title, Typed, rise, useEnter, useProgress} from './ui';
 import {
 	IconAlert, IconBookmark, IconBot, IconChart, IconChat, IconCoins, IconCrown, IconLeak,
@@ -91,7 +92,7 @@ export const Roles: React.FC<SceneProps> = ({line, continued, cue}) => {
 								<Icon size={66} color={active ? C.accent : C.text} />
 								<span style={{fontFamily: FONT, fontWeight: 700, fontSize: 30, color: C.muted}}>#{i + 1}</span>
 							</div>
-							<div style={{fontFamily: FONT, fontWeight: 700, fontSize: 38, lineHeight: 1.15, color: C.text, whiteSpace: 'pre-line'}}>
+							<div style={{fontFamily: FONT, fontWeight: 800, fontSize: 46, lineHeight: 1.12, color: C.text, whiteSpace: 'pre-line'}}>
 								{r.label}
 							</div>
 						</Card>
@@ -205,7 +206,7 @@ export const Night: React.FC<SceneProps> = ({line, cue}) => {
 						{[0, 1, 2].map((i) => <IconPerson key={i} size={110} color={C.muted} />)}
 					</div>
 					<div style={{position: 'relative'}}>
-						<Title size={60} color={C.muted}>аналитики в штате</Title>
+						<Title size={64} color={C.muted}>аналитики в штате</Title>
 						<div style={{position: 'absolute', left: 0, top: '52%', height: 6, borderRadius: 6, background: C.accent,
 							width: `${strike * 100}%`}} />
 					</div>
@@ -269,7 +270,7 @@ export const DemoRun: React.FC<SceneProps> = ({line, demo, continued, cue}) => {
 			<Card style={{width: 960, padding: '36px 36px 20px', background: C.bgDeep, ...rise(panel)}}>
 				<div style={{display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20}}>
 					<div style={{width: 18, height: 18, borderRadius: 18, background: C.accent}} />
-					<div style={{fontFamily: FONT, fontWeight: 700, fontSize: 32, color: C.muted}}>
+					<div style={{fontFamily: FONT, fontWeight: 700, fontSize: 38, color: C.muted}}>
 						команда агентов · магазин кружек
 					</div>
 				</div>
@@ -288,12 +289,12 @@ export const DemoRun: React.FC<SceneProps> = ({line, demo, continued, cue}) => {
 							<Badge size={96} active={hot}><Icon size={52} color={hot ? C.bgDeep : C.text} /></Badge>
 							<div style={{flex: 1, display: 'flex', flexDirection: 'column', gap: 10}}>
 								<div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-									<span style={{fontFamily: FONT, fontWeight: 800, fontSize: 38, color: hot ? C.accent : C.text}}>
+									<span style={{fontFamily: FONT, fontWeight: 800, fontSize: 46, color: hot ? C.accent : C.text}}>
 										{DEMO_NAMES[i]}
 									</span>
 									{finished ? <Check size={42} v={done ? 1 : lerp(f, t0 + runFor, t0 + runFor + 8)} /> : <Spinner size={42} />}
 								</div>
-								<div style={{fontFamily: FONT, fontWeight: 500, fontSize: 34, lineHeight: 1.3, color: C.text, minHeight: 88}}>
+								<div style={{fontFamily: FONT, fontWeight: 600, fontSize: 40, lineHeight: 1.25, color: C.text, minHeight: 100}}>
 									{done ? n.note : <Typed text={n.note} start={t0 + runFor} cps={70} />}
 								</div>
 							</div>
@@ -318,19 +319,19 @@ export const Phone: React.FC<SceneProps> = ({demo, cue}) => {
 	return (
 		<Stage gap={0}>
 			<div style={{
-				width: 640, height: 1030, borderRadius: 80, border: `3px solid ${C.line}`, background: C.bgDeep,
+				width: 700, height: 1120, borderRadius: 80, border: `4px solid ${C.text}`, background: C.bgDeep,
 				padding: '40px 32px', display: 'flex', flexDirection: 'column', gap: 30, ...rise(phone, 80),
 			}}>
 				<div style={{alignSelf: 'center', width: 170, height: 40, borderRadius: 40, background: '#0f1522'}} />
 				<div style={{fontFamily: FONT, fontWeight: 800, fontSize: 110, color: C.text, textAlign: 'center', letterSpacing: -3}}>09:41</div>
-				<div style={{...rise(note), background: 'rgba(255,255,255,0.08)', borderRadius: 40, padding: 30,
+				<div style={{...rise(note), background: 'rgba(38,42,79,0.06)', borderRadius: 40, padding: 30,
 					display: 'flex', flexDirection: 'column', gap: 20}}>
 					<div style={{display: 'flex', alignItems: 'center', gap: 14}}>
 						<Badge size={56} active><IconCrown size={32} color={C.bgDeep} /></Badge>
 						<span style={{fontFamily: FONT, fontWeight: 700, fontSize: 28, color: C.muted}}>Главный агент · сейчас</span>
 					</div>
-					<div style={{fontFamily: FONT, fontWeight: 500, fontSize: 31, lineHeight: 1.3, color: C.text}}>{lead?.message}</div>
-					<div style={{fontFamily: FONT, fontWeight: 800, fontSize: 36, lineHeight: 1.2, color: C.text}}>{lead?.question}</div>
+					<div style={{fontFamily: FONT, fontWeight: 600, fontSize: 35, lineHeight: 1.28, color: C.text}}>{lead?.message}</div>
+					<div style={{fontFamily: FONT, fontWeight: 800, fontSize: 42, lineHeight: 1.18, color: C.text}}>{lead?.question}</div>
 					<Pill style={{alignSelf: 'flex-start', fontSize: 28, padding: '8px 20px'}}>{lead?.effect}</Pill>
 					<div style={{display: 'flex', gap: 16, position: 'relative'}}>
 						<div style={{flex: 1, textAlign: 'center', padding: '18px 0', borderRadius: 22,
@@ -340,7 +341,7 @@ export const Phone: React.FC<SceneProps> = ({demo, cue}) => {
 							border: `2px solid ${C.line}`, color: C.text, fontFamily: FONT, fontWeight: 800, fontSize: 36}}>Нет</div>
 						{/* Палец-курсор нажимает «Да» */}
 						<div style={{position: 'absolute', left: 120, top: 30, width: 64, height: 64, borderRadius: 64,
-							background: 'rgba(246,241,234,0.55)', border: `3px solid ${C.text}`,
+							background: 'rgba(38,42,79,0.25)', border: `3px solid ${C.text}`,
 							opacity: tap * (1 - lerp(f, tYes + 10, tYes + 22)),
 							transform: `translate(${(1 - tap) * 120}px, ${(1 - tap) * 140}px) scale(${pressed ? 0.8 : 1})`}} />
 					</div>
@@ -399,6 +400,7 @@ export const Cta: React.FC<SceneProps> = ({line}) => {
 };
 
 export const SCENES: Record<string, React.FC<SceneProps>> = {
+	ransom: Ransom,
 	swarm: Swarm, roles: Roles, question: Question, flow: Flow, night: Night,
 	chapter: Chapter, demo_run: DemoRun, phone: Phone, statement: Statement, cta: Cta,
 };

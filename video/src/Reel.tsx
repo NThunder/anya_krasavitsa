@@ -1,69 +1,71 @@
 import React from 'react';
-import {AbsoluteFill, Audio, OffthreadVideo, Sequence, interpolate, staticFile, useCurrentFrame} from 'remotion';
+import {AbsoluteFill, Audio, Img, Sequence, interpolate, spring, staticFile, useCurrentFrame, useVideoConfig} from 'remotion';
+import {CartoonAvatar} from './CartoonAvatar';
 import {SCENES} from './scenes';
 import {Subtitles, makeChunks} from './Subtitles';
-import {C, FPS} from './theme';
-import {CartoonAvatar} from './CartoonAvatar';
-import {AvatarProps, Line, ReelProps} from './types';
+import {AVATAR, BOARD, C, FPS, PAPER, STAGE, STAGE_SCALE} from './theme';
+import {Line, ReelProps} from './types';
 
-const Background: React.FC = () => {
+// Лист в руках из шаблона: «впрыгивает» в начале и чуть покачивается.
+const Board: React.FC<{children: React.ReactNode}> = ({children}) => {
 	const f = useCurrentFrame();
-	// Мягкое тёплое пятно медленно плавает — фон живой, но без шума.
-	const x = 50 + 18 * Math.sin(f / 140);
-	const y = 38 + 10 * Math.cos(f / 170);
+	const {fps} = useVideoConfig();
+	const p = spring({frame: f, fps, config: {damping: 12, mass: 0.7}});
+	const float = `translateY(${Math.sin(f / 30) * 4}px) rotate(${Math.sin(f / 53) * 0.4}deg)`;
 	return (
 		<AbsoluteFill style={{
-			background: `radial-gradient(900px 900px at ${x}% ${y}%, rgba(233,165,107,0.10), transparent 70%),
-				radial-gradient(1400px 1600px at 50% 40%, ${C.bg}, ${C.bgDeep})`,
-		}} />
-	);
-};
-
-const Avatar: React.FC<{avatar: AvatarProps; fadeOut: number}> = ({avatar, fadeOut}) => {
-	const f = useCurrentFrame();
-	const o = interpolate(f, [fadeOut - 6, fadeOut], [1, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
-	return (
-		<AbsoluteFill style={{opacity: o}}>
-			{avatar.video ? (
-				<OffthreadVideo src={staticFile(avatar.video)} muted style={{width: '100%', height: '100%', objectFit: 'cover'}} />
-			) : (
-				<CartoonAvatar image={avatar.image} face={avatar.face} mouth={avatar.mouth} />
-			)}
+			transformOrigin: '50% 30%',
+			transform: `${float} scale(${interpolate(p, [0, 1], [0.55, 1])}) rotate(${interpolate(p, [0, 1], [-9, 0])}deg)`,
+			opacity: Math.min(1, p * 2),
+		}}>
+			<Img src={staticFile(BOARD.src)} style={{
+				position: 'absolute', left: BOARD.left, top: BOARD.top, width: BOARD.w * BOARD.scale, height: BOARD.h * BOARD.scale,
+			}} />
+			{/* Виртуальная сцена 1080x1180, вписанная в бумажную часть листа */}
+			<div style={{
+				position: 'absolute', width: STAGE.w, height: STAGE.h, transformOrigin: '0 0',
+				left: PAPER.x + (PAPER.w - STAGE.w * STAGE_SCALE) / 2,
+				top: PAPER.y + (PAPER.h - STAGE.h * STAGE_SCALE) / 2,
+				transform: `scale(${STAGE_SCALE})`,
+			}}>
+				{children}
+			</div>
 		</AbsoluteFill>
 	);
 };
 
 export const Reel: React.FC<ReelProps> = ({voice, avatar, lines, demo, duration}) => {
+	const f = useCurrentFrame();
+	const {fps} = useVideoConfig();
 	const chunks = makeChunks(lines);
 	const total = Math.ceil((duration + 0.6) * FPS);
-	const hooks = lines.filter((l) => l.visual.type === 'avatar');
-	const avatarEnd = hooks.length ? Math.round(lines[hooks.length].start * FPS) : 0;
+	const rise = spring({frame: f - 6, fps, config: {damping: 16}});
 
 	return (
-		<AbsoluteFill style={{background: C.bgDeep}}>
-			<Background />
-			{lines.map((line, i) => {
-				if (line.visual.type === 'avatar') return null;
-				const from = Math.round(line.start * FPS) - 4;
-				const to = i + 1 < lines.length ? Math.round(lines[i + 1].start * FPS) - 4 : total;
-				const Scene = SCENES[line.visual.type];
-				const prev: Line | undefined = lines[i - 1];
-				const continued = !!prev && prev.visual.type === line.visual.type;
-				// Кадр слова внутри реплики (относительно начала сцены).
-				const cue = (re: RegExp, fallback = 0) => {
-					const w = line.words.find((x) => re.test(x.w));
-					return w ? Math.round(w.start * FPS) - from : fallback;
-				};
-				return (
-					<Sequence key={line.id} from={from} durationInFrames={Math.max(1, to - from)}>
-						{Scene ? <Scene line={line} demo={demo} continued={continued} cue={cue} /> : null}
-					</Sequence>
-				);
-			})}
-			{avatar && hooks.length ? (
-				<Sequence from={0} durationInFrames={avatarEnd + 2}>
-					<Avatar avatar={avatar} fadeOut={avatarEnd} />
-				</Sequence>
+		<AbsoluteFill style={{background: C.bg}}>
+			<Board>
+				{lines.map((line, i) => {
+					const from = i === 0 ? 0 : Math.round(line.start * FPS) - 4;
+					const to = i + 1 < lines.length ? Math.round(lines[i + 1].start * FPS) - 4 : total;
+					const Scene = SCENES[line.visual.type];
+					const prev: Line | undefined = lines[i - 1];
+					const continued = !!prev && prev.visual.type === line.visual.type;
+					// Кадр слова внутри реплики (относительно начала сцены).
+					const cue = (re: RegExp, fallback = 0) => {
+						const w = line.words.find((x) => re.test(x.w));
+						return w ? Math.round(w.start * FPS) - from : fallback;
+					};
+					return (
+						<Sequence key={line.id} from={from} durationInFrames={Math.max(1, to - from)} layout="none">
+							{Scene ? <Scene line={line} demo={demo} continued={continued} cue={cue} /> : null}
+						</Sequence>
+					);
+				})}
+			</Board>
+			{avatar ? (
+				<AbsoluteFill style={{transform: `translateY(${(1 - rise) * 500}px)`}}>
+					<CartoonAvatar image={avatar.image} face={avatar.face} mouth={avatar.mouth} scale={AVATAR.scale} cut={AVATAR.cut} />
+				</AbsoluteFill>
 			) : null}
 			<Subtitles chunks={chunks} />
 			<Audio src={staticFile(voice)} />

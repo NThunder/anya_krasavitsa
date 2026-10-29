@@ -35,7 +35,8 @@ export const Title: React.FC<{children: React.ReactNode; size?: number; color?: 
 export const Pill: React.FC<{children: React.ReactNode; style?: React.CSSProperties}> = ({children, style}) => (
 	<div style={{
 		display: 'inline-flex', alignItems: 'center', gap: 12, padding: '12px 28px', borderRadius: 999,
-		background: C.accentSoft, color: C.accent, fontFamily: FONT, fontWeight: 700, fontSize: 34, ...style,
+		background: C.accent, color: C.bgDeep, fontFamily: FONT, fontWeight: 800, fontSize: 34,
+		transform: 'rotate(-2deg)', boxShadow: '0 4px 8px rgba(20,22,50,0.2)', ...style,
 	}}>
 		{children}
 	</div>
@@ -45,9 +46,10 @@ export const Card: React.FC<{children: React.ReactNode; active?: boolean; style?
 	children, active, style,
 }) => (
 	<div style={{
-		background: active ? C.accentSoft : C.card,
-		border: `2px solid ${active ? C.accent : C.line}`,
-		borderRadius: 36, ...style,
+		// Бумажки коллажа: кремовая, выделенная — жёлтая как звёзды шаблона.
+		background: active ? C.sun : C.card,
+		boxShadow: '0 6px 14px rgba(20,22,50,0.18)',
+		borderRadius: 18, ...style,
 	}}>
 		{children}
 	</div>
@@ -59,7 +61,7 @@ export const Badge: React.FC<{children: React.ReactNode; size?: number; active?:
 }) => (
 	<div style={{
 		width: size, height: size, borderRadius: size, display: 'flex', alignItems: 'center', justifyContent: 'center',
-		background: active ? C.accent : C.card, border: `2px solid ${active ? C.accent : C.line}`, ...style,
+		background: active ? C.accent : C.card, boxShadow: '0 5px 12px rgba(20,22,50,0.18)', ...style,
 	}}>
 		{children}
 	</div>
