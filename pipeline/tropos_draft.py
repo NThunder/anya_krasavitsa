@@ -95,7 +95,8 @@ def main(slug):
             "Публикации в Instagram здесь нет.")
     res = tool("tropos_save_draft", {"process": process, "note": note,
                                      "files": {n: base64.b64encode(b).decode() for n, b in files.items()}})
-    print(f"Черновик: {res['url']} (до {res.get('until')})")
+    # Ответ — JSON со ссылкой или текст со ссылкой внутри.
+    print("Черновик:", f"{res['url']} (до {res.get('until')})" if isinstance(res, dict) else res)
 
 
 if __name__ == "__main__":
