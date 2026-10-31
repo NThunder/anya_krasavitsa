@@ -239,8 +239,10 @@ const SCENES = {
 
 	// 6 ботов — 6 задач; подсветка на словах «Первый», «Второй»…
 	roles(line, f, {continued, cue}) {
-		const ROLES = [[I.chart, 'следит\nза рынком'], [I.target, 'ищет удачный\nмомент'], [I.news, 'читает\nновости'],
-			[I.coins, 'смотрит, куда\nидут деньги'], [I.alert, 'ищет\nриски'], [I.crown, 'главный']];
+		const items = (line.visual.items || []).slice(0, 6);
+		const ROLES = items.length ? items.map((it) => [I[it.icon] || I.bot, it.label || ''])
+			: [[I.chart, 'следит\nза рынком'], [I.target, 'ищет удачный\nмомент'], [I.news, 'читает\nновости'],
+				[I.coins, 'смотрит, куда\nидут деньги'], [I.alert, 'ищет\nриски'], [I.crown, 'главный']];
 		const ORD = [/Первый/, /Второй/, /Третий/, /Четв/, /пятый/i, /Шестой/];
 		const {title, highlight = []} = line.visual;
 		const head = enter(f, 0, !continued);
@@ -266,7 +268,8 @@ const SCENES = {
 		const e = enter(f, 0);
 		return Stage(
 			div({...rise(e), display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 30},
-				Badge(I.alert(110, C.bgDeep), 190, true) + Pill('бот №5')) +
+				Badge((I[line.visual.icon] || I.alert)(110, C.bgDeep), 190, true) +
+				(line.visual.pill === '' ? '' : Pill(esc(line.visual.pill ?? 'бот №5')))) +
 			Title(Typed(line.visual.text, 8, 22, f), 104), 64);
 	},
 
@@ -324,7 +327,7 @@ const SCENES = {
 			div({height: 300, position: 'relative', width: 940, display: 'flex', justifyContent: 'center'},
 				div({position: 'absolute', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 24, opacity: people * (1 - swap) * 0.9},
 					div({display: 'flex', gap: 30}, [0, 1, 2].map(() => I.person(110, C.muted)).join('')) +
-					div({position: 'relative'}, Title('аналитики в штате', 64, C.muted) +
+					div({position: 'relative'}, Title(esc(line.visual.before ?? 'аналитики в штате'), 64, C.muted) +
 						div({position: 'absolute', left: 0, top: '52%', height: 6, borderRadius: 6, background: C.accent, width: `${strike * 100}%`}))) +
 				div({position: 'absolute', display: 'flex', alignItems: 'center', gap: 34, ...rise(clock * swap)},
 					I.moon(130, C.accent) + Title(esc(line.visual.time), 200, C.text, {fontVariantNumeric: 'tabular-nums'}))) +
@@ -338,7 +341,7 @@ const SCENES = {
 	chapter(line, f) {
 		const a = enter(f, 0), b = enter(f, 8), c = enter(f, 14);
 		return Stage(
-			Badge(I.mug(150, C.bgDeep), 260, true, {opacity: a, transform: `translateY(${(1 - a) * 40}px) scale(${0.6 + 0.4 * a})`}) +
+			Badge((I[line.visual.icon] || I.mug)(150, C.bgDeep), 260, true, {opacity: a, transform: `translateY(${(1 - a) * 40}px) scale(${0.6 + 0.4 * a})`}) +
 			Pill(esc(line.visual.kicker), rise(b)) + Title(esc(line.visual.title), 100, C.text, rise(c)), 56);
 	},
 
@@ -377,7 +380,7 @@ const SCENES = {
 		const ph = enter(f, 0), note = enter(f, 10);
 		const tYes = cue(/^Да$|^Да[.,]/, 150);
 		const tap = lerp(f, tYes - 6, tYes + 4), pressed = f > tYes + 2;
-		const lead = (demo && demo.lead) || {};
+		const lead = line.visual.message ? line.visual : (demo && demo.lead) || {};
 		const btn = (label, active, extra = {}) => div({flex: 1, textAlign: 'center', padding: '18px 0', borderRadius: 22,
 			background: active ? C.accent : undefined, border: active ? undefined : `2px solid ${C.line}`,
 			color: active ? C.bgDeep : C.text, fontFamily: FONT, fontWeight: 800, fontSize: 36, ...extra}, label);
@@ -387,10 +390,10 @@ const SCENES = {
 			div({fontFamily: FONT, fontWeight: 800, fontSize: 110, color: C.text, textAlign: 'center', letterSpacing: -3}, '09:41') +
 			div({...rise(note), background: 'rgba(38,42,79,0.06)', borderRadius: 40, padding: 30, display: 'flex', flexDirection: 'column', gap: 20},
 				div({display: 'flex', alignItems: 'center', gap: 14},
-					Badge(I.crown(32, C.bgDeep), 56, true) + span({fontFamily: FONT, fontWeight: 700, fontSize: 28, color: C.muted}, 'Главный агент · сейчас')) +
+					Badge(I.crown(32, C.bgDeep), 56, true) + span({fontFamily: FONT, fontWeight: 700, fontSize: 28, color: C.muted}, esc(line.visual.from || 'Главный агент') + ' · сейчас')) +
 				div({fontFamily: FONT, fontWeight: 600, fontSize: 35, lineHeight: 1.28, color: C.text}, esc(lead.message)) +
 				div({fontFamily: FONT, fontWeight: 800, fontSize: 42, lineHeight: 1.18, color: C.text}, esc(lead.question)) +
-				Pill(esc(lead.effect), {alignSelf: 'flex-start', fontSize: 28, padding: '8px 20px'}) +
+				(lead.effect ? Pill(esc(lead.effect), {alignSelf: 'flex-start', fontSize: 28, padding: '8px 20px'}) : '') +
 				div({display: 'flex', gap: 16, position: 'relative'},
 					btn(pressed ? 'Да ✓' : 'Да', true, {transform: `scale(${pressed ? 0.95 : 1})`}) + btn('Нет', false) +
 					// Палец-курсор нажимает «Да».
@@ -404,13 +407,14 @@ const SCENES = {
 		const tTeam = cue(/команде/, 60);
 		const left = enter(f, 0), right = enter(f, tTeam - 4);
 		const strike = lerp(f, tTeam - 10, tTeam + 6);
-		return Stage(Title('секрет', 70, C.muted, rise(left)) +
+		const icon = I[line.visual.icon] || I.bot;
+		return Stage(Title(esc(line.visual.title ?? 'секрет'), 70, C.muted, rise(left)) +
 			div({display: 'flex', gap: 30, width: 940},
-				Card(I.bot(120, C.muted) + div({position: 'relative'}, Title(esc(line.visual.left), 60, C.text, {textAlign: 'left'}) +
+				Card(icon(120, C.muted) + div({position: 'relative'}, Title(esc(line.visual.left), 60, C.text, {textAlign: 'left'}) +
 					div({position: 'absolute', left: 0, top: '48%', height: 6, borderRadius: 6, background: C.accent, width: `${strike * 100}%`})),
 					false, {flex: 1, height: 520, padding: 40, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
 						opacity: left * (1 - 0.55 * strike), transform: `translateY(${(1 - left) * 30}px)`}) +
-				Card(div({display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, width: 240}, Array.from({length: 6}, () => I.bot(70, C.accent)).join('')) +
+				Card(div({display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, width: 240}, Array.from({length: 6}, () => icon(70, C.accent)).join('')) +
 					Title(esc(line.visual.right), 60, C.accent, {textAlign: 'left'}),
 					true, {flex: 1, height: 520, padding: 40, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', ...rise(right)})), 50);
 	},

@@ -85,3 +85,19 @@ python -m pipeline.html_package agent-team --render   # и локальный р
 Вызов программы: `html-video {in:page} {out:reel.mp4} --size 1080x1920 --fps 30 --duration <длина+0.6> --audio {in:voice}`.
 `tools/html-video.mjs` — локальная копия с тем же порядком работы: раздаёт папку страницы по `http://127.0.0.1`,
 ждёт шрифты, картинки и `window.READY`, для каждого кадра вызывает `window.seek(t)` и делает снимок.
+
+## Полный процесс в Tropos: новый рилс на каждый запуск
+
+`tropos/reels_auto.yaml` (процесс) и `tropos/writer.yaml` (агент-сценарист). Проверка и черновик:
+
+```bash
+python -m pipeline.tropos_process          # tropos_check
+python -m pipeline.tropos_process --save   # черновик со ссылкой
+```
+
+Шаги: Apify (хэштеги и каналы) → отбор доноров скриптом (английский, тема, свежесть, без повторов — память
+`used_donors`) → расшифровка трёх лучших → сценарий агентом `reels-writer` → озвучка ElevenLabs через fal двумя
+дублями → ffmpeg ×1.5 → распознавание слов (fal `elevenlabs/speech-to-text`) → тайминги скриптом → `html-video`
+(`page.html` и `assets.zip` — файлы черновика, `reel.json` — вход от шага) → ссылка fal_storage → одобрение →
+публикация в Instagram. Сцены страницы настраиваются данными (`items` у `roles`, `pill` и `icon` у `question`,
+`icon` у `chapter`, `title` и `icon` у `statement`, `before` у `night`, сообщение у `phone`).

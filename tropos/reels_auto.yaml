@@ -1,0 +1,429 @@
+process: reels_ai_agents_auto
+name: Рилс про ИИ-агентов по залетевшему ролику
+entry: автор канала
+description: |
+  Находит свежий популярный англоязычный рилс про ИИ-агентов и автоматизацию, пересказывает его по-русски,
+  озвучивает, собирает ролик-коллаж с рисованным аватаром и субтитрами и после одобрения публикует в Instagram.
+strict: true
+form:
+  - id: hashtags
+    label: Хэштеги для поиска
+    type: text
+    default: "aiagents, aiautomation, agenticai, claudecode, n8n, aiworkflow, businessautomation, multiagent"
+    hint: англоязычные, через запятую, без #
+  - id: accounts
+    label: Каналы-образцы
+    type: text
+    default: "sebastianhardy_, virex.explains, rollins.io, elliotxai, j.t.rivard, itsmodernmillie, nicolelunan"
+    hint: через запятую, без @; можно оставить пустым
+  - id: voice
+    label: Голос
+    type: select
+    values: [Lily, Alice, Charlotte, Laura, Matilda, Sarah]
+    default: Lily
+  - id: max_duration
+    label: Самый длинный донор, секунд
+    type: number
+    default: 120
+steps:
+  - id: prep
+    label: Разбор формы
+    description: Из формы берёт хэштеги и каналы, убирает # и @, пустые и повторы.
+    script: |
+      def run(data):
+          def clean(text, mark):
+              out = []
+              for part in str(text or "").replace("\n", ",").split(","):
+                  part = part.strip().lstrip(mark).strip()
+                  if part and part not in out:
+                      out.append(part)
+              return out
+          return {"hashtags": clean(data["hashtags"], "#"), "accounts": clean(data["accounts"], "@")}
+    input:
+      hashtags: "{{ form.hashtags }}"
+      accounts: "{{ form.accounts }}"
+
+  - id: scout
+    label: Поиск роликов
+    description: Одновременно собирает свежие Reels по хэштегам и последние ролики каналов-образцов.
+    parallel:
+      by_tags:
+        - id: scout_tags
+          label: Ролики по хэштегам
+          description: Популярные Reels по хэштегам через Apify.
+          request: apify
+          method: POST
+          path: /acts/apify~instagram-hashtag-scraper/run-sync-get-dataset-items
+          query: {timeout: 240, maxItems: 120, fields: "url,caption,videoPlayCount,igPlayCount,videoViewCount,likesCount,commentsCount,timestamp,videoDuration,ownerUsername"}
+          json: {hashtags: "{{ steps.prep.data.hashtags }}", resultsType: reels, resultsLimit: 15}
+          timeout: 300
+      by_accounts:
+        - id: scout_accounts
+          label: Ролики каналов
+          description: Последние Reels каналов-образцов за 90 дней через Apify.
+          request: apify
+          method: POST
+          path: /acts/apify~instagram-reel-scraper/run-sync-get-dataset-items
+          query: {timeout: 240, maxItems: 90, fields: "url,caption,videoPlayCount,igPlayCount,videoViewCount,likesCount,commentsCount,timestamp,videoDuration,ownerUsername"}
+          json: {username: "{{ steps.prep.data.accounts }}", resultsLimit: 12, onlyPostsNewerThan: "90 days", skipPinnedPosts: true}
+          timeout: 300
+          when: "{{ steps.prep.data.accounts | length > 0 }}"
+
+  - id: rank
+    label: Отбор доноров
+    description: Оставляет англоязычные ролики по теме нужной длины, которых ещё не брали, и ранжирует по просмотрам и вовлечённости с поправкой на свежесть.
+    script: |
+      import re
+      import datetime
+
+      def run(data):
+          keywords = ["agent", "automat", "workflow", "claude", "n8n", "make.com", "zapier", "gpt", "llm", "bot", "ai "]
+          latin = re.compile(r"[A-Za-z]")
+          foreign = re.compile(r"[Ѐ-ӿऀ-ॿ؀-ۿ]|\b(el|los|las|que|und|der|die|kya|hai)\b", re.I)
+          used = data.get("used") or []
+          if isinstance(used, str):
+              used = [u for u in re.split(r"[\s,\[\]\"]+", used) if u.startswith("http")]
+          now = datetime.datetime.now(datetime.timezone.utc)
+          items = []
+          for src in (data.get("tags"), data.get("accounts")):
+              if isinstance(src, list):
+                  items += [x for x in src if isinstance(x, dict)]
+          seen, picked = set(used), []
+          for it in items:
+              url = it.get("url")
+              caption = it.get("caption") or ""
+              if not url or url in seen:
+                  continue
+              seen.add(url)
+              letters = sum(1 for c in caption if c.isalpha()) or 1
+              if len(latin.findall(caption)) / letters <= 0.8 or foreign.search(caption):
+                  continue
+              if not any(k in caption.lower() for k in keywords):
+                  continue
+              if (it.get("videoDuration") or 0) > float(data.get("max_duration") or 120):
+                  continue
+              views = it.get("videoPlayCount") or it.get("igPlayCount") or it.get("videoViewCount") or 0
+              likes = max(it.get("likesCount") or 0, 0)
+              comments = it.get("commentsCount") or 0
+              age = 30
+              if it.get("timestamp"):
+                  ts = datetime.datetime.fromisoformat(str(it["timestamp"]).replace("Z", "+00:00"))
+                  age = max((now - ts).days, 1)
+              score = views * (1 + 10 * (likes + 3 * comments) / max(views, 1)) / (age ** 0.3)
+              picked.append({"url": url, "owner": it.get("ownerUsername"), "views": views, "likes": likes,
+                             "comments": comments, "score": round(score), "caption": caption[:300]})
+          picked.sort(key=lambda x: x["score"], reverse=True)
+          top = picked[:3]
+          return {"found": len(items), "fit": len(picked), "top": top, "urls": [x["url"] for x in top]}
+    input:
+      tags: "{{ steps.scout_tags.data.body }}"
+      accounts: "{{ steps.scout_accounts.data.body | default([]) }}"
+      used: "{{ memory.used_donors }}"
+      max_duration: "{{ form.max_duration }}"
+
+  - id: has_donors
+    description: Если среди найденных роликов нет ни одного нового англоязычного по теме — стоп, пересказывать нечего.
+    require: "{{ steps.rank.data.urls | length > 0 }}"
+    message: "Остановлено: среди найденных роликов нет нового англоязычного по теме — поменяйте хэштеги или каналы."
+
+  - id: donor
+    label: Расшифровка доноров
+    description: Для трёх лучших роликов достаёт через Apify подпись и расшифровку речи.
+    request: apify
+    method: POST
+    path: /acts/apify~instagram-reel-scraper/run-sync-get-dataset-items
+    query: {timeout: 240, maxItems: 3, fields: "url,caption,transcript,videoPlayCount,likesCount,commentsCount,videoDuration,ownerUsername"}
+    json: {username: "{{ steps.rank.data.urls }}", resultsLimit: 1, includeTranscript: true}
+    timeout: 300
+
+  - id: pick
+    label: Выбор донора
+    description: Берёт самый сильный ролик, у которого есть расшифровка речи, и собирает о нём задание для сценариста.
+    script: |
+      def run(data):
+          got = {}
+          for it in data.get("donors") or []:
+              if isinstance(it, dict) and it.get("url"):
+                  got[it["url"]] = it
+          best = None
+          for t in data["top"]:
+              d = got.get(t["url"], {})
+              text = d.get("transcript") or ""
+              if isinstance(text, list):
+                  text = " ".join(str(x.get("text", x)) if isinstance(x, dict) else str(x) for x in text)
+              if len(text) > 80:
+                  best = (t, d, text)
+                  break
+          if best is None:
+              t = data["top"][0]
+              best = (t, got.get(t["url"], {}), "")
+          t, d, text = best
+          brief = ("Ролик-донор @" + str(t["owner"]) + ", " + str(t["views"]) + " просмотров, " + str(t["likes"]) + " лайков.\n"
+                   + "Ссылка: " + t["url"] + "\n"
+                   + "Подпись: " + (d.get("caption") or t["caption"]) + "\n"
+                   + "Расшифровка: " + (text or "нет — опирайся на подпись"))
+          return {"url": t["url"], "owner": t["owner"], "views": t["views"], "brief": brief}
+    input:
+      top: "{{ steps.rank.data.top }}"
+      donors: "{{ steps.donor.data.body }}"
+
+  - id: writer
+    label: Сценарий на русском
+    description: Сценарист пересказывает идею донора для русскоязычной аудитории и раскладывает её на реплики со сценами.
+    agent: reels-writer
+    prompt: "{{ steps.pick.data.brief }}"
+    schema:
+      title: text
+      caption: text
+      lines: [{id: text, act: text, text: text, visual: text}]
+
+  - id: has_lines
+    description: Если сценарист не вернул реплик — стоп, озвучивать нечего.
+    require: "{{ steps.writer.data.lines | length > 3 }}"
+    message: "Остановлено: сценарий пустой — посмотрите ответ сценариста."
+
+  - id: build
+    label: Проверка сценария
+    description: Разбирает сцены реплик, заменяет неизвестные простым вопросом и делит текст на два дубля озвучки — хук и всё остальное.
+    script: |
+      import json
+      import re
+
+      def run(data):
+          kinds = {"ransom", "swarm", "roles", "question", "chapter", "phone", "night", "statement", "cta"}
+          lines = []
+          for n, l in enumerate(data["lines"]):
+              text = re.sub(r"\s+", " ", str(l.get("text") or "")).strip()
+              if not text:
+                  continue
+              v = l.get("visual")
+              if isinstance(v, str):
+                  try:
+                      v = json.loads(v)
+                  except ValueError:
+                      v = None
+              if not isinstance(v, dict) or v.get("type") not in kinds:
+                  short = " ".join(text.split()[:5]).rstrip(".,!?:;—").lower()
+                  v = {"type": "question", "text": short, "pill": ""}
+              lines.append({"id": str(l.get("id") or ("line" + str(n + 1))), "act": str(l.get("act") or "setup"),
+                            "text": text, "visual": v})
+          hook = [l for l in lines if l["act"] == "hook"] or lines[:2]
+          rest = [l for l in lines if l not in hook]
+          for l in hook:
+              l["act"] = "hook"
+          lines = hook + rest
+          tempo = 1.5
+          flt = ("[0:a]atempo=" + str(tempo) + ",aresample=44100,apad=pad_dur=0.2[a0];"
+                 + "[1:a]atempo=" + str(tempo) + ",aresample=44100[a1];[a0][a1]concat=n=2:v=0:a=1[out]")
+          script_text = "\n".join("[" + l["act"] + "] " + l["text"] for l in lines)
+          return {"lines": lines, "hook_text": " ".join(l["text"] for l in hook),
+                  "body_text": " ".join(l["text"] for l in rest), "filter": flt, "script_text": script_text}
+    input:
+      lines: "{{ steps.writer.data.lines }}"
+
+  - id: tts
+    label: Озвучка
+    description: Озвучивает хук и основную часть двумя цельными дублями — так интонация звучит живо.
+    parallel:
+      hook_take:
+        - id: tts_hook
+          label: Голос хука
+          description: ElevenLabs через fal озвучивает две реплики хука.
+          request: fal
+          method: POST
+          path: /elevenlabs/tts/eleven-v4
+          json: {text: "{{ steps.build.data.hook_text }}", voice: "{{ form.voice }}", language_code: ru}
+          wait: {poll: status_url, done: {status: COMPLETED}, failed: {status: [FAILED, ERROR]}, result: response_url}
+      body_take:
+        - id: tts_body
+          label: Голос основной части
+          description: ElevenLabs через fal озвучивает остальные реплики одним дублем.
+          request: fal
+          method: POST
+          path: /elevenlabs/tts/eleven-v4
+          json: {text: "{{ steps.build.data.body_text }}", voice: "{{ form.voice }}", language_code: ru}
+          wait: {poll: status_url, done: {status: COMPLETED}, failed: {status: [FAILED, ERROR]}, result: response_url}
+
+  - id: voice
+    label: Склейка и ускорение
+    description: Ускоряет оба дубля в полтора раза без изменения тембра и склеивает их с короткой паузой.
+    command: [ffmpeg, -y, -i, "{in:hook}", -i, "{in:body}", -filter_complex, "{{ steps.build.data.filter }}", -map, "[out]", -b:a, 192k, "{out:voice.mp3}"]
+    files:
+      hook: "{{ steps.tts_hook.data.body.audio.url }}"
+      body: "{{ steps.tts_body.data.body.audio.url }}"
+    timeout: 300
+
+  - id: voice_url
+    label: Ссылка на озвучку
+    description: Выкладывает готовую озвучку в хранилище fal, чтобы распознать в ней слова.
+    request: fal_storage
+    method: POST
+    path: /storage/upload/initiate
+    query: {storage_type: fal-cdn-v3}
+    json: {content_type: audio/mpeg, file_name: voice.mp3}
+    upload: {file: "{{ steps.voice.data.file }}", to: upload_url, content_type: audio/mpeg}
+
+  - id: stt
+    label: Тайминг слов
+    description: Распознаёт речь в готовой озвучке и получает время начала и конца каждого слова для субтитров и сцен.
+    request: fal
+    method: POST
+    path: /fal-ai/elevenlabs/speech-to-text
+    json: {audio_url: "{{ steps.voice_url.data.body.file_url }}", language_code: rus}
+    wait: {poll: status_url, done: {status: COMPLETED}, failed: {status: [FAILED, ERROR]}, result: response_url}
+
+  - id: timeline
+    label: Тайминги реплик
+    description: Переносит время распознанных слов на слова сценария и собирает данные страницы ролика — реплики, слова, сцены и лицо аватара.
+    script: |
+      import re
+
+      def run(data):
+          def norm(w):
+              return re.sub(r"[^\w]", "", w.lower().replace("ё", "е"))
+
+          def tokenize(text):
+              out = []
+              for tok in text.split():
+                  if not norm(tok) and out:
+                      out[-1] += " " + tok
+                  else:
+                      out.append(tok)
+              return out
+
+          stt = [w for w in (data.get("words") or []) if w.get("type", "word") == "word"]
+          lines = data["lines"]
+          tokens = [tokenize(l["text"]) for l in lines]
+          words = [w for t in tokens for w in t]
+          a = [norm(w) for w in words]
+          b = [norm(w.get("text", "")) for w in stt]
+          n, m = len(a), len(b)
+          dp = [[0] * (m + 1) for _ in range(n + 1)]
+          for i in range(n - 1, -1, -1):
+              for j in range(m - 1, -1, -1):
+                  dp[i][j] = dp[i + 1][j + 1] + 1 if a[i] == b[j] and a[i] else max(dp[i + 1][j], dp[i][j + 1])
+          times = [None] * n
+          i = j = 0
+          while i < n and j < m:
+              if a[i] == b[j] and a[i]:
+                  times[i] = (float(stt[j]["start"]), float(stt[j]["end"]))
+                  i += 1
+                  j += 1
+              elif dp[i + 1][j] >= dp[i][j + 1]:
+                  i += 1
+              else:
+                  j += 1
+          first = float(stt[0]["start"]) if stt else 0.0
+          last = float(stt[-1]["end"]) if stt else 0.4 * n
+          k = 0
+          while k < n:
+              if times[k] is None:
+                  e = k
+                  while e < n and times[e] is None:
+                      e += 1
+                  lo = times[k - 1][1] if k else first
+                  hi = times[e][0] if e < n else max(last, lo + 0.3 * (e - k))
+                  step = max(hi - lo, 0.2 * (e - k)) / (e - k)
+                  for q in range(k, e):
+                      times[q] = (lo + (q - k) * step, lo + (q - k + 1) * step)
+                  k = e
+              k += 1
+          out, pos = [], 0
+          for line, toks in zip(lines, tokens):
+              lw = [{"w": w, "start": round(times[pos + q][0], 3), "end": round(times[pos + q][1], 3)} for q, w in enumerate(toks)]
+              pos += len(toks)
+              out.append({"id": line["id"], "act": line["act"], "text": line["text"], "visual": line["visual"],
+                          "start": lw[0]["start"], "end": lw[-1]["end"], "words": lw})
+          duration = round(max(last, out[-1]["end"]) + 0.3, 3)
+          face = @FACE@
+          reel = {"duration": duration, "voice": "voice.mp3", "avatar": {"face": face}, "demo": None, "lines": out}
+          return {"reel": reel, "length": round(duration + 0.6, 2), "matched": sum(1 for t in times if t) }
+    input:
+      words: "{{ steps.stt.data.body.words }}"
+      lines: "{{ steps.build.data.lines }}"
+
+  - id: render
+    label: Сборка ролика
+    description: Снимает страницу-коллаж покадрово в Chromium — лист с анимированными сценами, субтитры, говорящий аватар — и подмешивает озвучку.
+    command: [html-video, "{in:page}", "{out:reel.mp4}", --size, 1080x1920, --fps, "30", --duration, "{{ steps.timeline.data.length }}", --audio, "{in:voice}", --assets, "{in:assets}"]
+    files:
+      page: "draft:page.html"
+      assets: "draft:assets.zip"
+      voice: "{{ steps.voice.data.file }}"
+      reel: {text: "{{ steps.timeline.data.reel }}", name: reel.json}
+    timeout: 1200
+
+  - id: video_url
+    label: Ссылка на ролик
+    description: Выкладывает ролик в хранилище fal — по этой ссылке его можно посмотреть и её же забирает Instagram.
+    request: fal_storage
+    method: POST
+    path: /storage/upload/initiate
+    query: {storage_type: fal-cdn-v3}
+    json: {content_type: video/mp4, file_name: reel.mp4}
+    upload: {file: "{{ steps.render.data.file }}", to: upload_url, content_type: video/mp4}
+
+  - id: publish_ok
+    label: Одобрение публикации
+    description: Автор смотрит ролик, сценарий и подпись и решает, публиковать ли; без ответа ничего не уходит.
+    approve:
+      title: "Публикуем рилс «{{ steps.writer.data.title }}»?"
+      text: "Ролик: {{ steps.video_url.data.body.file_url }}\n\nДонор: {{ steps.pick.data.url }} (@{{ steps.pick.data.owner }}, {{ steps.pick.data.views }} просмотров)\n\nПодпись:\n{{ steps.writer.data.caption }}\n\nСценарий:\n{{ steps.build.data.script_text }}"
+      fields: [{id: caption, label: "Своя подпись (пусто — оставить как есть)"}]
+      on_timeout: stop
+
+  - id: final
+    label: Подпись к посту
+    description: Берёт подпись автора из одобрения, а если её нет — подпись сценариста.
+    script: |
+      def run(data):
+          own = str(data.get("own") or "").strip()
+          return {"caption": own or str(data.get("caption") or "")}
+    input:
+      own: "{{ approve.publish_ok.caption | default('') }}"
+      caption: "{{ steps.writer.data.caption }}"
+
+  - id: container
+    label: Загрузка в Instagram
+    description: Отдаёт Instagram ссылку на ролик с подписью и ждёт, пока он обработает видео.
+    request: instagram
+    method: POST
+    path: /me/media
+    json: {media_type: REELS, video_url: "{{ steps.video_url.data.body.file_url }}", caption: "{{ steps.final.data.caption }}", share_to_feed: true}
+    wait: {poll_path: "/{id}", poll_query: {fields: status_code}, done: {status_code: FINISHED}, failed: {status_code: [ERROR, EXPIRED]}, every: 10, timeout: 900}
+    writes: true
+
+  - id: publish
+    label: Публикация рилса
+    description: Публикует обработанный ролик в аккаунте.
+    request: instagram
+    method: POST
+    path: /me/media_publish
+    json: {creation_id: "{{ steps.container.data.body.id }}"}
+    writes: true
+
+  - id: used
+    label: Список взятых доноров
+    description: Добавляет донора к уже взятым, чтобы следующий запуск его не повторил.
+    script: |
+      import re
+
+      def run(data):
+          old = data.get("old") or []
+          if isinstance(old, str):
+              old = [u for u in re.split(r"[\s,\[\]\"]+", old) if u.startswith("http")]
+          return {"used": (list(old) + [data["url"]])[-300:]}
+    input:
+      old: "{{ memory.used_donors }}"
+      url: "{{ steps.pick.data.url }}"
+
+  - id: keep
+    description: Запоминает взятых доноров между запусками.
+    remember: used_donors
+    value: "{{ steps.used.data.used | toJson }}"
+
+  - id: summary
+    text: "Рилс «{{ steps.writer.data.title }}» опубликован (id {{ steps.publish.data.body.id }}).\nРолик: {{ steps.video_url.data.body.file_url }}\nДонор: {{ steps.pick.data.url }} (@{{ steps.pick.data.owner }})"
+report:
+  title: Рилс опубликован
+  from: summary
